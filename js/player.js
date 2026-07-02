@@ -39,8 +39,10 @@ class Player {
 
   boxCollides(px, py, pz) {
     const hw = PLAYER_W / 2;
+    // feet/head samples must sit at the very edge of the box, otherwise the
+    // player sinks a little into the ground each frame and gets snapped back
     for (const dx of [-hw, hw]) for (const dz of [-hw, hw])
-      for (const dy of [0.05, PLAYER_H / 2, PLAYER_H - 0.05])
+      for (const dy of [0.001, 0.9, PLAYER_H - 0.001])
         if (this.solidAt(px + dx, py + dy, pz + dz)) return true;
     return false;
   }
@@ -151,9 +153,9 @@ class Player {
     p[axis] += delta;
     if (!this.boxCollides(p.x, p.y, p.z)) { this.pos[axis] += delta; return; }
     // auto step-up small ledges when on ground
-    if (this.onGround && !this.flying && !this.boxCollides(p.x, p.y + 1.01, p.z) &&
-        !this.boxCollides(this.pos.x, this.pos.y + 1.01, this.pos.z)) {
-      this.pos[axis] += delta; this.pos.y += 1.01; return;
+    if (this.onGround && !this.flying && !this.boxCollides(p.x, p.y + 1, p.z) &&
+        !this.boxCollides(this.pos.x, this.pos.y + 1, this.pos.z)) {
+      this.pos[axis] += delta; this.pos.y += 1; return;
     }
     if (axis === 'x') this.vel.x = 0; else this.vel.z = 0;
   }
@@ -195,7 +197,9 @@ class Controls {
     this.sensitivity = 0.25;
     this.lookTouch = null;      // {id, lastX, lastY, startX, startY, startT, moved}
     this.joyTouch = null;
-    this.breakTarget = null;    // {key, progress, need, sx, sy}
+    this.breakTarget = null;    // {key, hit, progress, need}
+    this.digHeld = false;       // ⛏ button (mobile) / left mouse (desktop)
+    this.attackCd = 0;
     this.keys = {};
     this._lastJumpTap = 0;
     this._bindTouch();
@@ -239,11 +243,10 @@ class Controls {
         if (this.lookTouch && t.identifier === this.lookTouch.id) {
           const lt = this.lookTouch;
           const dur = performance.now() - lt.startT;
-          if (!lt.moved && dur < 250 && !this.breakBroke) {
+          if (!lt.moved && dur < 250) {
             g.tapAction(lt.startX, lt.startY);   // short tap: place / use
           }
           this.lookTouch = null;
-          this.stopBreaking();
         }
       }
     };
@@ -264,8 +267,6 @@ class Controls {
         } else if (!this.lookTouch) {
           this.lookTouch = { id: t.identifier, lastX: t.clientX, lastY: t.clientY,
             startX: t.clientX, startY: t.clientY, startT: performance.now(), moved: false };
-          this.breakBroke = false;
-          this.startBreaking(t.clientX, t.clientY);
         }
       }
     }, { passive: false });
@@ -292,6 +293,7 @@ class Controls {
       g.player.jumpHeld = true;
     }, () => { g.player.jumpHeld = false; });
     bind('btn-down', () => { g.player.downHeld = true; }, () => { g.player.downHeld = false; });
+    bind('btn-dig', () => { this.digHeld = true; }, () => { this.digHeld = false; });
     bind('btn-inv', () => g.ui.toggleInventory());
     bind('btn-pause', () => g.ui.togglePause());
   }
@@ -310,21 +312,6 @@ class Controls {
     nub.style.top = (41 + dy * 40) + 'px';
   }
 
-  // ---------- breaking (hold) ----------
-  startBreaking(sx, sy) {
-    const g = this.game;
-    const hit = g.raycastScreen(sx, sy);
-    if (!hit) { this.breakTarget = null; return; }
-    const def = BLOCKS[hit.id];
-    if (!def || def.hard === Infinity && g.mode === 'survival') { this.breakTarget = null; return; }
-    const need = g.mode === 'creative' ? 0.22 : Math.max(0.15, def.hard);
-    this.breakTarget = { key: hit.x + ',' + hit.y + ',' + hit.z, hit, progress: 0, need, sx, sy, delay: 0.22 };
-  }
-  stopBreaking() {
-    this.breakTarget = null;
-    document.getElementById('break-ring').style.display = 'none';
-  }
-
   update(dt) {
     const g = this.game;
     // keyboard movement
@@ -336,31 +323,49 @@ class Controls {
       g.player.downHeld = !!k['ShiftLeft'];
       g.player.sprint = !!k['ControlLeft'];
     }
-    // hold-to-break progress
-    const bt = this.breakTarget;
-    if (bt) {
-      bt.delay -= dt;
-      if (bt.delay <= 0) {
-        // retarget in case the view drifted (desktop: crosshair)
-        bt.progress += dt;
-        const ring = document.getElementById('break-ring');
-        ring.style.display = 'block';
-        ring.style.left = bt.sx + 'px'; ring.style.top = bt.sy + 'px';
-        const deg = Math.min(360, bt.progress / bt.need * 360);
-        ring.style.background = `conic-gradient(#fff ${deg}deg, transparent ${deg}deg)`;
-        if (bt.progress >= bt.need) {
-          g.breakBlock(bt.hit);
-          this.breakBroke = true;
-          this.stopBreaking();
-          // allow continuing to dig: re-target after short pause
-          if (this.lookTouch) {
-            setTimeout(() => { if (this.lookTouch) this.startBreaking(this.lookTouch.lastX, this.lookTouch.lastY); }, 60);
-          } else if (this.mouseDown) {
-            this.startBreaking(innerWidth / 2, innerHeight / 2);
+
+    // hold ⛏ (mobile) / left mouse (desktop): attack mob or dig block at crosshair
+    this.attackCd = Math.max(0, this.attackCd - dt);
+    const ring = document.getElementById('break-ring');
+    const digging = (this.digHeld || this.mouseDown) && !g.paused && !g.player.dead;
+    let showRing = false;
+
+    if (digging) {
+      const cx = innerWidth / 2, cy = innerHeight / 2;
+      g._raycaster.setFromCamera(new THREE.Vector2(0, 0), g.camera);
+      const mob = g.mobs.raycastMob(g._raycaster);
+      if (mob) {
+        if (this.attackCd <= 0) { mob.hurt(5, g.player.pos); this.attackCd = 0.45; }
+        this.breakTarget = null;
+      } else {
+        const hit = g.raycastScreen(cx, cy);
+        const def = hit && BLOCKS[hit.id];
+        if (!def || (def.hard === Infinity && g.mode === 'survival')) {
+          this.breakTarget = null;
+        } else {
+          const key = hit.x + ',' + hit.y + ',' + hit.z;
+          if (!this.breakTarget || this.breakTarget.key !== key) {
+            this.breakTarget = { key, hit, progress: 0,
+              need: g.mode === 'creative' ? 0.22 : Math.max(0.15, def.hard) };
+          }
+          const bt = this.breakTarget;
+          bt.hit = hit;
+          bt.progress += dt;
+          if (bt.progress >= bt.need) {
+            g.breakBlock(bt.hit);
+            this.breakTarget = null;      // next frame re-targets automatically
+          } else {
+            showRing = true;
+            ring.style.left = cx + 'px'; ring.style.top = cy + 'px';
+            const deg = Math.min(360, bt.progress / bt.need * 360);
+            ring.style.background = `conic-gradient(#fff ${deg}deg, transparent ${deg}deg)`;
           }
         }
       }
+    } else {
+      this.breakTarget = null;
     }
+    ring.style.display = showRing ? 'block' : 'none';
   }
 
   // ---------- keyboard / mouse (desktop) ----------
@@ -385,19 +390,16 @@ class Controls {
     canvas.addEventListener('mousedown', e => {
       if (this.touchMode && !document.pointerLockElement) return;
       if (!document.pointerLockElement) { canvas.requestPointerLock(); return; }
-      if (e.button === 0) { this.mouseDown = true; this.startBreaking(innerWidth / 2, innerHeight / 2); if (this.breakTarget) this.breakTarget.delay = 0; }
+      if (e.button === 0) this.mouseDown = true;
       if (e.button === 2) g.tapAction(innerWidth / 2, innerHeight / 2);
     });
-    window.addEventListener('mouseup', () => { this.mouseDown = false; this.stopBreaking(); });
+    window.addEventListener('mouseup', () => { this.mouseDown = false; });
     window.addEventListener('contextmenu', e => e.preventDefault());
     window.addEventListener('mousemove', e => {
       if (!document.pointerLockElement) return;
       g.player.yaw -= e.movementX * 0.0022 * this.sensitivity * 4;
       g.player.pitch -= e.movementY * 0.0022 * this.sensitivity * 4;
       g.player.pitch = Math.max(-1.55, Math.min(1.55, g.player.pitch));
-    });
-    document.addEventListener('pointerlockchange', () => {
-      document.getElementById('crosshair').style.display = document.pointerLockElement ? 'block' : 'none';
     });
   }
 }

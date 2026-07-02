@@ -19,7 +19,7 @@
   /* ---------- HUD ---------- */
   #hud { position:absolute; inset:0; pointer-events:none; z-index:10; }
   #crosshair { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-    width:20px; height:20px; opacity:.8; display:none; }
+    width:20px; height:20px; opacity:.8; }
   #crosshair::before, #crosshair::after { content:''; position:absolute; background:#fff;
     mix-blend-mode:difference; }
   #crosshair::before { left:9px; top:0; width:2px; height:20px; }
@@ -51,8 +51,9 @@
     font-size:24px; display:flex; align-items:center; justify-content:center;
     pointer-events:auto; z-index:12; }
   .tbtn:active { background:rgba(255,255,255,.25); }
-  #btn-jump  { right:18px; bottom:calc(120px + env(safe-area-inset-bottom)); width:66px; height:66px; border-radius:50%; }
-  #btn-down  { right:96px; bottom:calc(96px + env(safe-area-inset-bottom)); display:none; }
+  #btn-jump  { right:18px; bottom:calc(130px + env(safe-area-inset-bottom)); width:66px; height:66px; border-radius:50%; }
+  #btn-dig   { right:104px; bottom:calc(78px + env(safe-area-inset-bottom)); width:76px; height:76px; border-radius:50%; font-size:32px; }
+  #btn-down  { right:18px; bottom:calc(210px + env(safe-area-inset-bottom)); display:none; }
   #btn-inv   { right:12px; top:calc(6px + env(safe-area-inset-top)); font-size:20px; }
   #btn-pause { right:78px; top:calc(6px + env(safe-area-inset-top)); font-size:20px; }
   #joystick { position:absolute; left:24px; bottom:calc(60px + env(safe-area-inset-bottom));
@@ -133,6 +134,7 @@
   <div id="joystick"><div class="nub"></div></div>
   <div id="break-ring"></div>
   <button class="tbtn" id="btn-jump">⬆</button>
+  <button class="tbtn" id="btn-dig">⛏</button>
   <button class="tbtn" id="btn-down">⬇</button>
   <button class="tbtn" id="btn-inv">🎒</button>
   <button class="tbtn" id="btn-pause">⏸</button>
@@ -156,7 +158,7 @@
   <button class="mbtn" id="btn-fullscreen">Vollbild</button>
   <div class="sub" style="margin-top:18px;max-width:340px;text-align:center">
     Steuerung: links berühren &amp; ziehen = laufen · rechts wischen = umsehen ·
-    kurz tippen = Block setzen / benutzen · gedrückt halten = abbauen ·
+    kurz tippen = Block setzen / benutzen · ⛏ halten = abbauen &amp; kämpfen (zielt aufs Fadenkreuz) ·
     ⬆ = springen (2× tippen = fliegen im Kreativmodus)
   </div>
 </div>
@@ -172,9 +174,10 @@
   <button class="mbtn" id="btn-save">Welt speichern</button>
   <label class="mlabel">Sichtweite</label>
   <div class="mrow" id="rd-row">
-    <button class="mbtn" data-rd="2">Kurz</button>
-    <button class="mbtn on" data-rd="3">Normal</button>
-    <button class="mbtn" data-rd="4">Weit</button>
+    <button class="mbtn" data-rd="3">Kurz</button>
+    <button class="mbtn on" data-rd="4">Normal</button>
+    <button class="mbtn" data-rd="5">Weit</button>
+    <button class="mbtn" data-rd="6">Max</button>
   </div>
   <label class="mlabel">Empfindlichkeit</label>
   <div class="mrow" id="sens-row">

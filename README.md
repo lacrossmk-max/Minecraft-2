@@ -26,8 +26,8 @@ python3 -m http.server 8000
 |---|---|
 | Laufen | linke Bildschirmhälfte berühren und ziehen (Joystick erscheint am Finger) |
 | Umsehen | rechte Bildschirmhälfte wischen |
-| Block setzen / benutzen / essen / Mob schlagen | kurz tippen |
-| Block abbauen | gedrückt halten (Fortschrittsring) |
+| Block setzen / benutzen / essen | kurz tippen |
+| Block abbauen / Mob kämpfen | ⛏-Knopf halten (zielt aufs Fadenkreuz in der Mitte) |
 | Springen | ⬆-Knopf |
 | Fliegen (Kreativ) | ⬆ doppelt tippen, ⬇ zum Sinken |
 | Inventar / Handwerk | 🎒-Knopf |

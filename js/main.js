@@ -92,7 +92,7 @@ class Game {
     this.particles = new Particles(this.scene);
     this.paused = false;
     this.running = false;
-    this.renderDist = ('ontouchstart' in window) ? 3 : 3;
+    this.renderDist = 4;
     this.timeOfDay = 0.3;               // 0..1 (0.25 = noon-ish morning start)
     this.dayLength = 600;               // seconds per full day
     this.daylight = 1;
@@ -214,9 +214,10 @@ class Game {
 
   applyFog() {
     const far = this.renderDist * CHUNK;
-    this.scene.fog.near = far * 0.55;
-    this.scene.fog.far = far * 1.05;
-    this.camera.far = far * 3;
+    this.scene.fog.near = far * 0.6;
+    this.scene.fog.far = far * 1.02;
+    // keep the far plane fixed so sun, moon and stars (radius ~190) never clip
+    this.camera.far = 400;
     this.camera.updateProjectionMatrix();
   }
 
