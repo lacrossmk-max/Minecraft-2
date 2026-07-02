@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
+<meta name="theme-color" content="#87ceeb">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Blockwelt – Voxel Sandbox</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#000;
+    font-family:'Segoe UI',system-ui,sans-serif; touch-action:none;
+    -webkit-user-select:none; user-select:none; position:fixed; }
+  #game-canvas { position:absolute; inset:0; width:100%; height:100%; display:block; }
+
+  /* ---------- HUD ---------- */
+  #hud { position:absolute; inset:0; pointer-events:none; z-index:10; }
+  #crosshair { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:20px; height:20px; opacity:.8; display:none; }
+  #crosshair::before, #crosshair::after { content:''; position:absolute; background:#fff;
+    mix-blend-mode:difference; }
+  #crosshair::before { left:9px; top:0; width:2px; height:20px; }
+  #crosshair::after { left:0; top:9px; width:20px; height:2px; }
+
+  #hotbar { position:absolute; left:50%; bottom:calc(8px + env(safe-area-inset-bottom));
+    transform:translateX(-50%); display:flex; gap:3px; pointer-events:auto; z-index:12; }
+  .slot { width:46px; height:46px; background:rgba(0,0,0,.45); border:2px solid rgba(255,255,255,.35);
+    border-radius:4px; position:relative; }
+  .slot.sel { border-color:#fff; box-shadow:0 0 6px #fff; }
+  .slot .icon { position:absolute; inset:5px; background-size:800% 800%;
+    image-rendering:pixelated; }
+  .slot .cnt { position:absolute; right:2px; bottom:1px; color:#fff; font-size:12px;
+    font-weight:bold; text-shadow:1px 1px 0 #000; }
+
+  #status-bars { position:absolute; left:50%; bottom:calc(62px + env(safe-area-inset-bottom));
+    transform:translateX(-50%); text-align:center; font-size:16px; line-height:1.15;
+    text-shadow:1px 1px 0 #000; letter-spacing:1px; }
+  #air-row { color:#4ad2ff; }
+
+  #info-top { position:absolute; top:calc(6px + env(safe-area-inset-top)); left:8px; color:#fff;
+    font-size:12px; text-shadow:1px 1px 0 #000; opacity:.85; }
+  #clock { position:absolute; top:calc(6px + env(safe-area-inset-top)); left:50%; transform:translateX(-50%);
+    color:#fff; font-size:14px; text-shadow:1px 1px 0 #000; }
+
+  /* ---------- Touch controls ---------- */
+  .tbtn { position:absolute; width:58px; height:58px; border-radius:12px;
+    background:rgba(0,0,0,.4); border:2px solid rgba(255,255,255,.5); color:#fff;
+    font-size:24px; display:flex; align-items:center; justify-content:center;
+    pointer-events:auto; z-index:12; }
+  .tbtn:active { background:rgba(255,255,255,.25); }
+  #btn-jump  { right:18px; bottom:calc(120px + env(safe-area-inset-bottom)); width:66px; height:66px; border-radius:50%; }
+  #btn-down  { right:96px; bottom:calc(96px + env(safe-area-inset-bottom)); display:none; }
+  #btn-inv   { right:12px; top:calc(6px + env(safe-area-inset-top)); font-size:20px; }
+  #btn-pause { right:78px; top:calc(6px + env(safe-area-inset-top)); font-size:20px; }
+  #joystick { position:absolute; left:24px; bottom:calc(60px + env(safe-area-inset-bottom));
+    width:130px; height:130px; border-radius:50%; background:rgba(0,0,0,.25);
+    border:2px solid rgba(255,255,255,.35); z-index:11; }
+  #joystick .nub { position:absolute; left:41px; top:41px; width:48px; height:48px;
+    border-radius:50%; background:rgba(255,255,255,.5); }
+  #break-ring { position:absolute; width:56px; height:56px; margin:-28px 0 0 -28px;
+    border-radius:50%; display:none; z-index:11;
+    background:conic-gradient(#fff 0deg, transparent 0deg); opacity:.75; }
+
+  /* ---------- Overlays / Menus ---------- */
+  .overlay { position:absolute; inset:0; background:rgba(10,12,25,.88); z-index:50;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    color:#fff; pointer-events:auto; overflow-y:auto; }
+  .overlay h1 { font-size:min(9vw,44px); margin-bottom:6px; letter-spacing:3px;
+    color:#8fd66a; text-shadow:3px 3px 0 #2a4d1a; }
+  .overlay h2 { margin-bottom:14px; }
+  .overlay .sub { color:#aaa; margin-bottom:22px; font-size:14px; }
+  .mbtn { display:block; width:min(78vw,320px); margin:6px auto; padding:13px;
+    font-size:17px; background:#6e6e6e; color:#fff; border:2px solid #333;
+    border-bottom-color:#111; border-radius:4px; cursor:pointer; text-align:center; }
+  .mbtn:active { background:#8a8a8a; }
+  .mbtn.green { background:#4c9141; }
+  .mbtn.red { background:#a33; }
+  .mrow { display:flex; gap:8px; width:min(78vw,320px); margin:6px auto; }
+  .mrow .mbtn { flex:1; width:auto; margin:0; font-size:14px; padding:10px 4px; }
+  .mrow .mbtn.on { background:#4c9141; }
+  input[type=text] { width:min(78vw,320px); padding:11px; margin:6px auto; display:block;
+    font-size:16px; background:#222; color:#fff; border:2px solid #555; border-radius:4px; }
+  label.mlabel { display:block; width:min(78vw,320px); margin:10px auto 2px; font-size:13px; color:#bbb; }
+
+  /* Inventar */
+  #inventory { display:none; }
+  #inv-grid { display:grid; grid-template-columns:repeat(auto-fill,52px); gap:6px;
+    width:min(92vw,480px); max-height:38vh; overflow-y:auto; justify-content:center;
+    padding:8px; background:rgba(0,0,0,.4); border-radius:8px; }
+  #inv-grid .slot { width:52px; height:52px; cursor:pointer; }
+  #craft-list { width:min(92vw,480px); max-height:26vh; overflow-y:auto; margin-top:10px;
+    background:rgba(0,0,0,.4); border-radius:8px; padding:6px; }
+  .recipe { display:flex; align-items:center; gap:8px; padding:5px 6px;
+    border-bottom:1px solid rgba(255,255,255,.12); font-size:13px; }
+  .recipe .icon { width:34px; height:34px; background-size:800% 800%; image-rendering:pixelated;
+    flex-shrink:0; border:1px solid #555; border-radius:3px; }
+  .recipe .txt { flex:1; }
+  .recipe button { padding:7px 13px; background:#4c9141; color:#fff; border:none;
+    border-radius:4px; font-size:13px; }
+  .recipe button:disabled { background:#555; color:#999; }
+
+  #death-screen { background:rgba(120,0,0,.7); display:none; }
+  #loading { display:none; }
+  #loadbar-outer { width:min(70vw,300px); height:14px; background:#222; border:2px solid #555;
+    border-radius:7px; margin-top:14px; }
+  #loadbar { width:0%; height:100%; background:#8fd66a; border-radius:5px; }
+  #msg-toast { position:absolute; left:50%; bottom:calc(120px + env(safe-area-inset-bottom));
+    transform:translateX(-50%); background:rgba(0,0,0,.7); color:#fff; padding:8px 16px;
+    border-radius:6px; font-size:14px; display:none; z-index:40; pointer-events:none; }
+  #damage-flash { position:absolute; inset:0; background:rgba(255,0,0,.35); display:none;
+    z-index:20; pointer-events:none; }
+  #water-tint { position:absolute; inset:0; background:rgba(20,60,180,.3); display:none;
+    z-index:9; pointer-events:none; }
+</style>
+</head>
+<body>
+<canvas id="game-canvas"></canvas>
+
+<div id="hud">
+  <div id="crosshair"></div>
+  <div id="info-top"></div>
+  <div id="clock"></div>
+  <div id="status-bars">
+    <div id="air-row"></div>
+    <div id="health-row"></div>
+    <div id="hunger-row"></div>
+  </div>
+  <div id="hotbar"></div>
+  <div id="joystick"><div class="nub"></div></div>
+  <div id="break-ring"></div>
+  <button class="tbtn" id="btn-jump">⬆</button>
+  <button class="tbtn" id="btn-down">⬇</button>
+  <button class="tbtn" id="btn-inv">🎒</button>
+  <button class="tbtn" id="btn-pause">⏸</button>
+</div>
+
+<div id="water-tint"></div>
+<div id="damage-flash"></div>
+<div id="msg-toast"></div>
+
+<div class="overlay" id="title-screen">
+  <h1>BLOCKWELT</h1>
+  <div class="sub">Ein Voxel-Sandbox-Spiel für Handy &amp; Desktop</div>
+  <button class="mbtn green" id="btn-continue" style="display:none">Welt fortsetzen</button>
+  <label class="mlabel">Welt-Seed (leer = zufällig)</label>
+  <input type="text" id="seed-input" placeholder="z.B. 12345">
+  <div class="mrow">
+    <button class="mbtn on" id="mode-survival">Überleben</button>
+    <button class="mbtn" id="mode-creative">Kreativ</button>
+  </div>
+  <button class="mbtn green" id="btn-new">Neue Welt erstellen</button>
+  <button class="mbtn" id="btn-fullscreen">Vollbild</button>
+  <div class="sub" style="margin-top:18px;max-width:340px;text-align:center">
+    Steuerung: Joystick links = laufen · rechts wischen = umsehen ·
+    kurz tippen = Block setzen / benutzen · gedrückt halten = abbauen ·
+    ⬆ = springen (2× tippen = fliegen im Kreativmodus)
+  </div>
+</div>
+
+<div class="overlay" id="loading">
+  <h2>Welt wird generiert …</h2>
+  <div id="loadbar-outer"><div id="loadbar"></div></div>
+</div>
+
+<div class="overlay" id="pause-menu" style="display:none">
+  <h2>Pause</h2>
+  <button class="mbtn green" id="btn-resume">Weiterspielen</button>
+  <button class="mbtn" id="btn-save">Welt speichern</button>
+  <label class="mlabel">Sichtweite</label>
+  <div class="mrow" id="rd-row">
+    <button class="mbtn" data-rd="2">Kurz</button>
+    <button class="mbtn on" data-rd="3">Normal</button>
+    <button class="mbtn" data-rd="4">Weit</button>
+  </div>
+  <label class="mlabel">Empfindlichkeit</label>
+  <div class="mrow" id="sens-row">
+    <button class="mbtn" data-s="0.15">Niedrig</button>
+    <button class="mbtn on" data-s="0.25">Mittel</button>
+    <button class="mbtn" data-s="0.4">Hoch</button>
+  </div>
+  <button class="mbtn" id="btn-sound">Sound: An</button>
+  <button class="mbtn" id="btn-fullscreen2">Vollbild</button>
+  <button class="mbtn red" id="btn-quit">Speichern &amp; Hauptmenü</button>
+</div>
+
+<div class="overlay" id="inventory">
+  <h2 id="inv-title">Inventar</h2>
+  <div id="inv-grid"></div>
+  <h2 style="margin-top:14px;font-size:17px" id="craft-title">Handwerk</h2>
+  <div id="craft-list"></div>
+  <button class="mbtn green" id="btn-inv-close" style="margin-top:12px">Schließen</button>
+</div>
+
+<div class="overlay" id="death-screen">
+  <h2>Du bist gestorben!</h2>
+  <div class="sub" id="death-cause"></div>
+  <button class="mbtn green" id="btn-respawn">Wiederbeleben</button>
+</div>
+
+<script src="lib/three.min.js"></script>
+<script src="js/noise.js"></script>
+<script src="js/blocks.js"></script>
+<script src="js/world.js"></script>
+<script src="js/player.js"></script>
+<script src="js/mobs.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

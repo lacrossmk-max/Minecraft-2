@@ -1,0 +1,18 @@
+{
+  "name": "Blockwelt – Voxel Sandbox",
+  "short_name": "Blockwelt",
+  "start_url": ".",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0a0e28",
+  "theme_color": "#87ceeb",
+  "description": "Ein Voxel-Sandbox-Spiel für Handy und Desktop",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
