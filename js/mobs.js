@@ -33,20 +33,33 @@ class Mob {
       b.position.set(x, y, z);
       g.add(b); return b;
     };
+    // limb pivoted at the hip so it can swing while walking
+    const limb = (w, h, d, x, hipY, z, m) => {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      geo.translate(0, -h / 2, 0);
+      const b = new THREE.Mesh(geo, m || mat);
+      b.position.set(x, hipY, z);
+      g.add(b); return b;
+    };
+    this.limbs = []; this.limbPhase = [];
     if (this.type === 'pig') {
       box(0.7, 0.5, 1.0, 0, 0.55, 0);                 // body
       box(0.45, 0.45, 0.45, 0, 0.75, -0.6);           // head
       box(0.18, 0.12, 0.06, 0, 0.68, -0.85, dark);    // snout
-      for (const [x, z] of [[-0.2, -0.35], [0.2, -0.35], [-0.2, 0.35], [0.2, 0.35]])
-        box(0.18, 0.35, 0.18, x, 0.18, z, dark);      // legs
+      const legPos = [[-0.2, -0.35], [0.2, -0.35], [-0.2, 0.35], [0.2, 0.35]];
+      legPos.forEach(([x, z], i) => {
+        this.limbs.push(limb(0.18, 0.35, 0.18, x, 0.35, z, dark));
+        this.limbPhase.push(i === 0 || i === 3 ? 0 : Math.PI);   // diagonal gait
+      });
     } else {
       const pants = new THREE.MeshLambertMaterial({ color: 0x3a4a8a });
       box(0.5, 0.7, 0.3, 0, 1.05, 0);                 // torso
       box(0.42, 0.42, 0.42, 0, 1.6, 0, dark);         // head
       box(0.16, 0.65, 0.16, -0.34, 1.2, -0.2);        // arms (stretched forward-ish)
       box(0.16, 0.65, 0.16, 0.34, 1.2, -0.2);
-      box(0.2, 0.7, 0.2, -0.13, 0.35, 0, pants);      // legs
-      box(0.2, 0.7, 0.2, 0.13, 0.35, 0, pants);
+      this.limbs.push(limb(0.2, 0.7, 0.2, -0.13, 0.7, 0, pants));
+      this.limbs.push(limb(0.2, 0.7, 0.2, 0.13, 0.7, 0, pants));
+      this.limbPhase.push(0, Math.PI);
     }
     return g;
   }
@@ -126,9 +139,18 @@ class Mob {
       if (this._burnT > 1) { this._burnT = 0; this.hurt(4, null); }
     }
 
-    // mesh sync
+    // mesh sync — models are built facing local -z, movement goes toward
+    // (sin yaw, cos yaw), so the mesh needs an extra half turn
     this.mesh.position.copy(this.pos);
-    this.mesh.rotation.y = this.yaw;
+    this.mesh.rotation.y = this.yaw + Math.PI;
+
+    // walk animation
+    const moving = spd > 0.05;
+    this.animT = (this.animT || 0) + dt * spd * 3.5;
+    for (let i = 0; i < this.limbs.length; i++) {
+      const target = moving ? Math.sin(this.animT + this.limbPhase[i]) * 0.7 : 0;
+      this.limbs[i].rotation.x += (target - this.limbs[i].rotation.x) * Math.min(1, dt * 12);
+    }
     const flash = this.hurtT > 0;
     this.mesh.traverse(o => { if (o.isMesh) o.material.emissive?.setHex(flash ? 0x883333 : 0x000000); });
   }

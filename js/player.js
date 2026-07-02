@@ -244,7 +244,8 @@ class Controls {
           const lt = this.lookTouch;
           const dur = performance.now() - lt.startT;
           if (!lt.moved && dur < 250) {
-            g.tapAction(lt.startX, lt.startY);   // short tap: place / use
+            // short tap: place / use at the crosshair (matches the ghost preview)
+            g.tapAction(innerWidth / 2, innerHeight / 2);
           }
           this.lookTouch = null;
         }

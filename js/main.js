@@ -170,6 +170,8 @@ class Game {
     this.world = new World(seed, this.scene, mats);
     this.player = new Player(this.world, this.camera);
     this.mobs = new MobManager(this);
+    this._setupPreview(tex);
+    this._setupClouds();
 
     if (save) {
       this.mode = save.mode;
@@ -212,6 +214,98 @@ class Game {
     loadStep();
   }
 
+  // ---------------- build preview (ghost block + selection outline) ----------------
+  _setupPreview(tex) {
+    this.outline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1.004, 1.004, 1.004)),
+      new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.65 }));
+    this.outline.visible = false;
+    this.ghost = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.5, depthWrite: false }));
+    this.ghost.visible = false;
+    this._ghostId = 0;
+    this.scene.add(this.outline, this.ghost);
+  }
+
+  // rewrite the ghost cube UVs so it shows the selected block's textures
+  _setGhostTile(id) {
+    if (id === this._ghostId) return;
+    this._ghostId = id;
+    const def = BLOCKS[id];
+    if (!def) return;
+    // BoxGeometry face order: +x,-x,+y,-y,+z,-z — 4 verts each
+    const tiles = [def.tex[2], def.tex[2], def.tex[0], def.tex[1], def.tex[2], def.tex[2]];
+    const corner = [[0, 1], [1, 1], [0, 0], [1, 0]];
+    const uv = this.ghost.geometry.getAttribute('uv');
+    const ts = 1 / ATLAS_TILES;
+    for (let f = 0; f < 6; f++) {
+      const t = tiles[f];
+      const tu = (t % ATLAS_TILES) * ts, tv = 1 - (Math.floor(t / ATLAS_TILES) + 1) * ts;
+      for (let v = 0; v < 4; v++) {
+        uv.setXY(f * 4 + v, tu + corner[v][0] * ts, tv + corner[v][1] * ts);
+      }
+    }
+    uv.needsUpdate = true;
+  }
+
+  updatePreview() {
+    const hit = this.raycastScreen(innerWidth / 2, innerHeight / 2);
+    if (!hit || this.player.dead) {
+      this.outline.visible = false; this.ghost.visible = false;
+      return;
+    }
+    this.outline.visible = true;
+    this.outline.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
+
+    // ghost only when a tap would actually place the selected block here
+    const item = this.ui.currentItem();
+    const digging = this.controls.digHeld || this.controls.mouseDown;
+    let ok = !digging && !!BLOCKS[item] && hit.id !== B.TNT && hit.id !== B.CRAFT;
+    const bx = hit.x + hit.nx, by = hit.y + hit.ny, bz = hit.z + hit.nz;
+    if (ok) {
+      const cur = this.world.getBlock(bx, by, bz);
+      ok = by >= 1 && by < HEIGHT &&
+        (cur === B.AIR || isFluid(cur) || !!BLOCKS[cur]?.cross) &&
+        !(isSolid(item) && this.player.placementBlocked(bx, by, bz)) &&
+        (this.mode === 'creative' || (this.inventory.get(item) || 0) > 0);
+    }
+    if (ok) {
+      this._setGhostTile(item);
+      this.ghost.position.set(bx + 0.5, by + 0.5, bz + 0.5);
+      this.ghost.visible = true;
+    } else {
+      this.ghost.visible = false;
+    }
+  }
+
+  // ---------------- clouds ----------------
+  _setupClouds() {
+    this.clouds = new THREE.Group();
+    this.cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true,
+      opacity: 0.5, side: THREE.DoubleSide, depthWrite: false, fog: false });
+    const rand = mulberry32(4242);
+    for (let i = 0; i < 26; i++) {
+      const m = new THREE.Mesh(
+        new THREE.PlaneGeometry(14 + rand() * 30, 10 + rand() * 20), this.cloudMat);
+      m.rotation.x = -Math.PI / 2;
+      m.position.set((rand() - 0.5) * 460, 80 + rand() * 8, (rand() - 0.5) * 460);
+      this.clouds.add(m);
+    }
+    this.scene.add(this.clouds);
+  }
+
+  updateClouds(dt) {
+    const px = this.player.pos.x, pz = this.player.pos.z;
+    for (const m of this.clouds.children) {
+      m.position.x += dt * 1.6;
+      if (m.position.x - px > 230) m.position.x -= 460;
+      if (px - m.position.x > 230) m.position.x += 460;
+      if (m.position.z - pz > 230) m.position.z -= 460;
+      if (pz - m.position.z > 230) m.position.z += 460;
+    }
+    this.cloudMat.opacity = 0.15 + 0.35 * this.daylight;
+  }
+
   applyFog() {
     const far = this.renderDist * CHUNK;
     this.scene.fog.near = far * 0.6;
@@ -236,6 +330,17 @@ class Game {
     this.particles.update(dt);
     this.updateTnt(dt);
     this.updateDayNight(dt);
+    this.updatePreview();
+    this.updateClouds(dt);
+
+    // subtle FOV boost while sprinting / flying
+    const pl = this.player;
+    const movingNow = Math.abs(pl.moveX) + Math.abs(pl.moveZ) > 0.1;
+    const targetFov = 72 + (pl.sprint && movingNow ? 8 : 0) + (pl.flying ? 5 : 0);
+    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+      this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 8);
+      this.camera.updateProjectionMatrix();
+    }
 
     document.getElementById('water-tint').style.display = this.player.eyeInWater ? 'block' : 'none';
     this.ui.refreshStatus();
