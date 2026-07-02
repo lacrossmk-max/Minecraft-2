@@ -24,7 +24,7 @@ python3 -m http.server 8000
 **Handy (Touch):**
 | Aktion | Geste |
 |---|---|
-| Laufen | Joystick unten links |
+| Laufen | linke Bildschirmhälfte berühren und ziehen (Joystick erscheint am Finger) |
 | Umsehen | rechte Bildschirmhälfte wischen |
 | Block setzen / benutzen / essen / Mob schlagen | kurz tippen |
 | Block abbauen | gedrückt halten (Fortschrittsring) |

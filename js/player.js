@@ -203,24 +203,17 @@ class Controls {
   }
 
   // ---------- touch ----------
+  // Dynamic joystick: touching anywhere on the left 45% of the screen spawns
+  // the joystick under the finger; everything else is look / dig / place.
   _bindTouch() {
     const joy = document.getElementById('joystick');
     const nub = joy.querySelector('.nub');
     const canvas = document.getElementById('game-canvas');
     const g = this.game;
 
-    const joyRect = () => joy.getBoundingClientRect();
-
-    joy.addEventListener('touchstart', e => {
-      e.preventDefault();
-      const t = e.changedTouches[0];
-      this.joyTouch = t.identifier;
-      this._joyMove(t, joyRect(), nub);
-    }, { passive: false });
-
     window.addEventListener('touchmove', e => {
       for (const t of e.changedTouches) {
-        if (t.identifier === this.joyTouch) this._joyMove(t, joyRect(), nub);
+        if (this.joyTouch !== null && t.identifier === this.joyTouch) this._joyMove(t, nub);
         else if (this.lookTouch && t.identifier === this.lookTouch.id) {
           const lt = this.lookTouch;
           const dx = t.clientX - lt.lastX, dy = t.clientY - lt.lastY;
@@ -236,9 +229,11 @@ class Controls {
 
     const endTouch = e => {
       for (const t of e.changedTouches) {
-        if (t.identifier === this.joyTouch) {
+        if (this.joyTouch !== null && t.identifier === this.joyTouch) {
           this.joyTouch = null;
           g.player.moveX = 0; g.player.moveZ = 0; g.player.sprint = false;
+          joy.classList.remove('active');
+          joy.style.left = ''; joy.style.top = '';
           nub.style.left = '41px'; nub.style.top = '41px';
         }
         if (this.lookTouch && t.identifier === this.lookTouch.id) {
@@ -258,8 +253,15 @@ class Controls {
     canvas.addEventListener('touchstart', e => {
       e.preventDefault();
       for (const t of e.changedTouches) {
-        if (t.identifier === this.joyTouch) continue;
-        if (!this.lookTouch) {
+        if (this.joyTouch === null && t.clientX < innerWidth * 0.45) {
+          // movement touch: spawn the joystick under the finger
+          this.joyTouch = t.identifier;
+          this.joyOrigin = { x: t.clientX, y: t.clientY };
+          joy.style.left = (t.clientX - 65) + 'px';
+          joy.style.top = (t.clientY - 65) + 'px';
+          joy.classList.add('active');
+          nub.style.left = '41px'; nub.style.top = '41px';
+        } else if (!this.lookTouch) {
           this.lookTouch = { id: t.identifier, lastX: t.clientX, lastY: t.clientY,
             startX: t.clientX, startY: t.clientY, startT: performance.now(), moved: false };
           this.breakBroke = false;
@@ -294,15 +296,16 @@ class Controls {
     bind('btn-pause', () => g.ui.togglePause());
   }
 
-  _joyMove(t, rect, nub) {
-    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
-    let dx = (t.clientX - cx) / (rect.width / 2), dy = (t.clientY - cy) / (rect.height / 2);
+  _joyMove(t, nub) {
+    const R = 52;
+    let dx = (t.clientX - this.joyOrigin.x) / R, dy = (t.clientY - this.joyOrigin.y) / R;
     const len = Math.hypot(dx, dy);
     if (len > 1) { dx /= len; dy /= len; }
     const g = this.game;
-    g.player.moveX = dx;
-    g.player.moveZ = dy;
-    g.player.sprint = len > 0.92 && dy < -0.5;
+    const dead = len < 0.12;                 // small deadzone against drift
+    g.player.moveX = dead ? 0 : dx;
+    g.player.moveZ = dead ? 0 : dy;
+    g.player.sprint = len > 0.95 && dy < -0.5;
     nub.style.left = (41 + dx * 40) + 'px';
     nub.style.top = (41 + dy * 40) + 'px';
   }

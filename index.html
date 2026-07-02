@@ -57,7 +57,8 @@
   #btn-pause { right:78px; top:calc(6px + env(safe-area-inset-top)); font-size:20px; }
   #joystick { position:absolute; left:24px; bottom:calc(60px + env(safe-area-inset-bottom));
     width:130px; height:130px; border-radius:50%; background:rgba(0,0,0,.25);
-    border:2px solid rgba(255,255,255,.35); z-index:11; }
+    border:2px solid rgba(255,255,255,.35); z-index:11; pointer-events:none; opacity:.45; }
+  #joystick.active { opacity:.95; }
   #joystick .nub { position:absolute; left:41px; top:41px; width:48px; height:48px;
     border-radius:50%; background:rgba(255,255,255,.5); }
   #break-ring { position:absolute; width:56px; height:56px; margin:-28px 0 0 -28px;
@@ -154,7 +155,7 @@
   <button class="mbtn green" id="btn-new">Neue Welt erstellen</button>
   <button class="mbtn" id="btn-fullscreen">Vollbild</button>
   <div class="sub" style="margin-top:18px;max-width:340px;text-align:center">
-    Steuerung: Joystick links = laufen · rechts wischen = umsehen ·
+    Steuerung: links berühren &amp; ziehen = laufen · rechts wischen = umsehen ·
     kurz tippen = Block setzen / benutzen · gedrückt halten = abbauen ·
     ⬆ = springen (2× tippen = fliegen im Kreativmodus)
   </div>
