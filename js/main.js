@@ -128,14 +128,19 @@ class Game {
     this.scene.fog = new THREE.Fog(0x87ceeb, 30, 120);
     this.ambient = new THREE.AmbientLight(0xffffff, 0.7);
     this.sun = new THREE.DirectionalLight(0xffffff, 1.0);
-    // sun shadows: a shadow box that follows the player
+    // sun shadows: a tight shadow box that follows the player. A smaller
+    // frustum packs the 2048² map into the area right around the player, so
+    // shadows are sharp and clearly visible instead of blurred to nothing.
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024);
+    this.sun.shadow.mapSize.set(2048, 2048);
     const sc = this.sun.shadow.camera;
-    sc.near = 10; sc.far = 280;
-    sc.left = sc.bottom = -60; sc.right = sc.top = 60;
+    sc.near = 20; sc.far = 400;
+    sc.left = sc.bottom = -48; sc.right = sc.top = 48;
     sc.updateProjectionMatrix();   // required after changing the frustum
-    this.sun.shadow.bias = -0.0004;
+    // normalBias offsets along the surface normal — the right tool for blocky
+    // geometry; keeps shadows attached to their caster without acne
+    this.sun.shadow.bias = -0.0002;
+    this.sun.shadow.normalBias = 0.6;
     this.sunTarget = new THREE.Object3D();
     this.sun.target = this.sunTarget;
     this.scene.add(this.ambient, this.sun, this.sunTarget);
@@ -658,25 +663,12 @@ class Game {
       this.camera.updateProjectionMatrix();
     }
 
-    // throttled shadow map refresh (terrain is static, ~7 Hz is plenty)
+    // throttled shadow map refresh (terrain is static, ~9 Hz is plenty and
+    // keeps the extra shadow pass affordable on phones). Shadows are only ever
+    // turned off by the player via the pause-menu toggle, never automatically.
     if (this.shadowsOn) {
       this._shadowT = (this._shadowT || 0) - dt;
-      if (this._shadowT <= 0) { this._shadowT = 0.14; this.renderer.shadowMap.needsUpdate = true; }
-    }
-    // auto-disable shadows on devices that can't keep up — but not during the
-    // first 20 s, where chunk meshing makes every device stutter
-    this._uptime = (this._uptime || 0) + dt;
-    this._fpsAcc = (this._fpsAcc || 0) + dt; this._fpsN = (this._fpsN || 0) + 1;
-    if (this._fpsAcc > 5) {
-      const fps = this._fpsN / this._fpsAcc;
-      this._fpsAcc = 0; this._fpsN = 0;
-      if (this._uptime > 20 && fps < 19 && this.shadowsOn && !this._shadowAutoOff) {
-        this._shadowAutoOff = true;
-        this.shadowsOn = false;
-        this.applyShadows();
-        document.getElementById('btn-shadow').textContent = 'Schatten: Aus';
-        this.toast('Schatten deaktiviert (Leistung)', 2500);
-      }
+      if (this._shadowT <= 0) { this._shadowT = 0.11; this.renderer.shadowMap.needsUpdate = true; }
     }
 
     document.getElementById('water-tint').style.display = this.player.eyeInWater ? 'block' : 'none';
@@ -729,10 +721,11 @@ class Game {
     this.skyMat.uniforms.bottom.value.copy(bottom);
     this._skyHorizon = bottom;
 
-    // ambient + real directional sun (terrain now has normals, so the sun
-    // shades faces by direction and shadows actually darken the ground)
-    this.ambient.intensity = (0.38 + 0.22 * d) * (1 - rainAmt * 0.28) + flash * 1.6;
-    this.sun.intensity = (0.2 + 0.95 * d) * (1 - rainAmt * 0.55);
+    // ambient + real directional sun (terrain has normals, so the sun shades
+    // faces by direction and cast shadows clearly darken the ground). Lower
+    // ambient = stronger shadow contrast.
+    this.ambient.intensity = (0.32 + 0.18 * d) * (1 - rainAmt * 0.28) + flash * 1.6;
+    this.sun.intensity = (0.25 + 1.15 * d) * (1 - rainAmt * 0.55);
     this.sun.color.setHex(0xffffff).lerp(new THREE.Color(0xff9b50), duskAmt);
     // clouds react to weather
     this.cloudMat.color.setHex(0xffffff).lerp(grey, rainAmt * 0.8);
