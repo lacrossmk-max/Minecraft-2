@@ -101,7 +101,8 @@ class Player {
           }
           this.pos.y = Math.floor(ny) + 1;
         } else {
-          this.pos.y = Math.ceil(ny + PLAYER_H) - PLAYER_H - 0.001;
+          // head hit a ceiling: place the head just below the blocking cell
+          this.pos.y = Math.floor(ny + PLAYER_H) - PLAYER_H - 0.001;
         }
         this.vel.y = 0;
       } else {

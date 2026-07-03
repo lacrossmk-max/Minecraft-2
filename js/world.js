@@ -456,6 +456,12 @@ class World {
       const [cx, cz] = k.split(',').map(Number);
       if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > renderDist + 1) this.removeMesh(cx, cz);
     }
+    // free far chunk data too — generation is deterministic and player
+    // edits live in this.edits, so dropped chunks regenerate identically
+    for (const k of this.chunks.keys()) {
+      const [cx, cz] = k.split(',').map(Number);
+      if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > renderDist + 4) this.chunks.delete(k);
+    }
     return done;
   }
 

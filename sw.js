@@ -1,5 +1,5 @@
 // Simple offline cache for Blockwelt
-const CACHE = 'blockwelt-v6';
+const CACHE = 'blockwelt-v7';
 const FILES = [
   '.', 'index.html', 'manifest.webmanifest', 'icon.svg',
   'lib/three.min.js',

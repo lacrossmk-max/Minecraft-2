@@ -162,8 +162,14 @@ class UI {
 
     const fs = () => {
       const el = document.documentElement;
-      if (!document.fullscreenElement) (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
-      else document.exitFullscreen();
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (!req) {
+        // iPhone Safari has no fullscreen API
+        g.toast('Vollbild: „Zum Home-Bildschirm hinzufügen" nutzen', 3000);
+        return;
+      }
+      if (!document.fullscreenElement) req.call(el);
+      else (document.exitFullscreen || document.webkitExitFullscreen).call(document);
     };
     $('btn-fullscreen').addEventListener('pointerdown', fs);
     $('btn-fullscreen2').addEventListener('pointerdown', fs);

@@ -132,6 +132,7 @@ class Game {
     const sc = this.sun.shadow.camera;
     sc.near = 10; sc.far = 280;
     sc.left = sc.bottom = -60; sc.right = sc.top = 60;
+    sc.updateProjectionMatrix();   // required after changing the frustum
     this.sun.shadow.bias = -0.0004;
     this.sunTarget = new THREE.Object3D();
     this.sun.target = this.sunTarget;
@@ -472,7 +473,7 @@ class Game {
     this.rainAmt = (this.rainAmt || 0) + (target - (this.rainAmt || 0)) * Math.min(1, dt * 0.5);
 
     const biome = this.world.columnInfo(Math.floor(this.player.pos.x), Math.floor(this.player.pos.z)).biome;
-    const raining = w.type !== 'clear' && biome !== 'desert';
+    const raining = w.type !== 'clear' && biome !== 'desert' && !this.player.eyeInWater;
     const snowing = raining && biome === 'snow';
     this.rain.visible = raining && !snowing;
     this.snow.visible = snowing;
