@@ -115,22 +115,49 @@ class Game {
   }
 
   _setupSky() {
-    this.skyDay = new THREE.Color(0x87ceeb);
-    this.skyNight = new THREE.Color(0x0a0e28);
-    this.skyDusk = new THREE.Color(0xe8894a);
-    this.scene.background = this.skyDay.clone();
     this.scene.fog = new THREE.Fog(0x87ceeb, 30, 120);
     this.ambient = new THREE.AmbientLight(0xffffff, 0.7);
     this.sun = new THREE.DirectionalLight(0xffffff, 1.0);
     this.scene.add(this.ambient, this.sun);
 
-    // sun & moon planes attached to camera-following pivot
+    // gradient sky dome (zenith -> horizon), follows the player
+    this.skyMat = new THREE.ShaderMaterial({
+      uniforms: { top: { value: new THREE.Color(0x3878d8) }, bottom: { value: new THREE.Color(0xa9d2f5) } },
+      vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `varying vec3 vP; uniform vec3 top; uniform vec3 bottom;
+        void main(){
+          float h = clamp(normalize(vP).y, 0.0, 1.0);
+          gl_FragColor = vec4(mix(bottom, top, pow(h, 0.55)), 1.0);
+        }`,
+      side: THREE.BackSide, depthWrite: false, fog: false,
+    });
+    this.skyDome = new THREE.Mesh(new THREE.SphereGeometry(340, 24, 12), this.skyMat);
+    this.skyDome.renderOrder = -10;
+    this.scene.add(this.skyDome);
+
+    // glowing round sun + pale moon on a rotating pivot
+    const discTex = (inner, outer, glow) => {
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 64;
+      const c = cv.getContext('2d');
+      const gr = c.createRadialGradient(32, 32, 4, 32, 32, 30);
+      gr.addColorStop(0, inner);
+      gr.addColorStop(glow, outer);
+      gr.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = gr;
+      c.fillRect(0, 0, 64, 64);
+      const t = new THREE.CanvasTexture(cv);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    };
     this.skyPivot = new THREE.Group();
-    const sunMesh = new THREE.Mesh(new THREE.PlaneGeometry(20, 20),
-      new THREE.MeshBasicMaterial({ color: 0xfff4b0, fog: false }));
+    const sunMesh = new THREE.Mesh(new THREE.PlaneGeometry(46, 46),
+      new THREE.MeshBasicMaterial({ map: discTex('rgba(255,250,220,1)', 'rgba(255,214,120,0.85)', 0.42),
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
     sunMesh.position.set(0, 180, 0); sunMesh.rotation.x = Math.PI / 2;
-    const moonMesh = new THREE.Mesh(new THREE.PlaneGeometry(14, 14),
-      new THREE.MeshBasicMaterial({ color: 0xddddee, fog: false }));
+    const moonMesh = new THREE.Mesh(new THREE.PlaneGeometry(22, 22),
+      new THREE.MeshBasicMaterial({ map: discTex('rgba(228,232,248,1)', 'rgba(190,198,230,0.9)', 0.55),
+        transparent: true, depthWrite: false, fog: false }));
     moonMesh.position.set(0, -180, 0); moonMesh.rotation.x = -Math.PI / 2;
     this.skyPivot.add(sunMesh, moonMesh);
     this.scene.add(this.skyPivot);
@@ -162,16 +189,31 @@ class Game {
     tex.colorSpace = THREE.SRGBColorSpace;
     this.ui.setAtlas(atlas);
 
+    // scrolling fluid textures (world-space UVs come from the mesher)
+    const fluidTex = kind => {
+      const t = new THREE.CanvasTexture(makeFluidCanvas(kind, seed));
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.magFilter = THREE.NearestFilter;
+      t.minFilter = THREE.NearestFilter;
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    };
+    this.waterTex = fluidTex('water');
+    this.lavaTex = fluidTex('lava');
+
     const mats = {
       opaque: new THREE.MeshLambertMaterial({ map: tex, vertexColors: true }),
       alpha: new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide }),
-      water: new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false }),
+      water: new THREE.MeshLambertMaterial({ map: this.waterTex, vertexColors: true, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false }),
+      lava: new THREE.MeshBasicMaterial({ map: this.lavaTex, vertexColors: true, side: THREE.DoubleSide }),
     };
     this.world = new World(seed, this.scene, mats);
     this.player = new Player(this.world, this.camera);
     this.mobs = new MobManager(this);
     this._setupPreview(tex);
     this._setupClouds();
+    this._setupHand(tex);
+    this._setupCrack(tex);
 
     if (save) {
       this.mode = save.mode;
@@ -227,16 +269,10 @@ class Game {
     this.scene.add(this.outline, this.ghost);
   }
 
-  // rewrite the ghost cube UVs so it shows the selected block's textures
-  _setGhostTile(id) {
-    if (id === this._ghostId) return;
-    this._ghostId = id;
-    const def = BLOCKS[id];
-    if (!def) return;
-    // BoxGeometry face order: +x,-x,+y,-y,+z,-z — 4 verts each
-    const tiles = [def.tex[2], def.tex[2], def.tex[0], def.tex[1], def.tex[2], def.tex[2]];
+  // rewrite a BoxGeometry's UVs to show atlas tiles (face order +x,-x,+y,-y,+z,-z)
+  _setCubeUVs(geometry, tiles) {
     const corner = [[0, 1], [1, 1], [0, 0], [1, 0]];
-    const uv = this.ghost.geometry.getAttribute('uv');
+    const uv = geometry.getAttribute('uv');
     const ts = 1 / ATLAS_TILES;
     for (let f = 0; f < 6; f++) {
       const t = tiles[f];
@@ -246,6 +282,17 @@ class Game {
       }
     }
     uv.needsUpdate = true;
+  }
+
+  _blockTiles(id) {
+    const def = BLOCKS[id];
+    return [def.tex[2], def.tex[2], def.tex[0], def.tex[1], def.tex[2], def.tex[2]];
+  }
+
+  _setGhostTile(id) {
+    if (id === this._ghostId) return;
+    this._ghostId = id;
+    if (BLOCKS[id]) this._setCubeUVs(this.ghost.geometry, this._blockTiles(id));
   }
 
   updatePreview() {
@@ -278,18 +325,110 @@ class Game {
     }
   }
 
+  // ---------------- first-person hand ----------------
+  _setupHand(tex) {
+    this.hand = new THREE.Group();
+    this.handBlock = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 0.34),
+      new THREE.MeshLambertMaterial({ map: tex }));
+    this.handItem = new THREE.Mesh(new THREE.PlaneGeometry(0.38, 0.38),
+      new THREE.MeshLambertMaterial({ map: tex, transparent: true, alphaTest: 0.3, side: THREE.DoubleSide }));
+    this.hand.add(this.handBlock, this.handItem);
+    this.hand.position.set(0.42, -0.36, -0.62);
+    this.hand.rotation.set(0.1, Math.PI / 7, 0);
+    this.camera.add(this.hand);
+    this.scene.add(this.camera);
+    this._handId = -1;
+    this._swingT = 1;
+    this._walkT = 0;
+  }
+
+  swingHand(force) {
+    if (force || this._swingT >= 1) this._swingT = 0;
+  }
+
+  updateHand(dt) {
+    const id = this.ui.currentItem();
+    if (id !== this._handId) {
+      this._handId = id;
+      if (BLOCKS[id]) {
+        this._setCubeUVs(this.handBlock.geometry, this._blockTiles(id));
+        this.handBlock.visible = true; this.handItem.visible = false;
+      } else if (ITEMS[id]) {
+        const t = ITEMS[id].tile, ts = 1 / ATLAS_TILES;
+        const tu = (t % ATLAS_TILES) * ts, tv = 1 - (Math.floor(t / ATLAS_TILES) + 1) * ts;
+        const corner = [[0, 1], [1, 1], [0, 0], [1, 0]];
+        const uv = this.handItem.geometry.getAttribute('uv');
+        for (let v = 0; v < 4; v++) uv.setXY(v, tu + corner[v][0] * ts, tv + corner[v][1] * ts);
+        uv.needsUpdate = true;
+        this.handBlock.visible = false; this.handItem.visible = true;
+      } else {
+        this.handBlock.visible = false; this.handItem.visible = false;
+      }
+    }
+    // walk bob
+    const p = this.player;
+    const spd = Math.hypot(p.vel.x, p.vel.z);
+    if (p.onGround && spd > 0.5) this._walkT += dt * spd * 1.7;
+    const bobY = Math.sin(this._walkT * 2) * 0.016;
+    const bobX = Math.cos(this._walkT) * 0.012;
+    // swing (dig / place / attack)
+    this._swingT = Math.min(1, this._swingT + dt * 3.5);
+    const s = Math.sin(this._swingT * Math.PI);
+    this.hand.position.set(0.42 + bobX - s * 0.1, -0.36 + bobY - s * 0.12, -0.62 - s * 0.08);
+    this.hand.rotation.set(0.1 - s * 1.1, Math.PI / 7 + s * 0.3, 0);
+  }
+
+  // ---------------- crack overlay while digging ----------------
+  _setupCrack(tex) {
+    this.crack = new THREE.Mesh(new THREE.BoxGeometry(1.006, 1.006, 1.006),
+      new THREE.MeshLambertMaterial({ map: tex, transparent: true, alphaTest: 0.3,
+        polygonOffset: true, polygonOffsetFactor: -2, depthWrite: false }));
+    this.crack.visible = false;
+    this._crackStage = -1;
+    this.scene.add(this.crack);
+  }
+
+  setCrack(bt) {
+    if (!bt || bt.progress <= 0.03) {
+      this.crack.visible = false; this._crackStage = -1;
+      return;
+    }
+    const stage = Math.min(3, Math.floor(bt.progress / bt.need * 4));
+    if (stage !== this._crackStage) {
+      this._crackStage = stage;
+      const t = 40 + stage;
+      this._setCubeUVs(this.crack.geometry, [t, t, t, t, t, t]);
+    }
+    this.crack.position.set(bt.hit.x + 0.5, bt.hit.y + 0.5, bt.hit.z + 0.5);
+    this.crack.visible = true;
+  }
+
   // ---------------- clouds ----------------
   _setupClouds() {
     this.clouds = new THREE.Group();
     this.cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true,
-      opacity: 0.5, side: THREE.DoubleSide, depthWrite: false, fog: false });
+      opacity: 0.5, depthWrite: false, fog: false });
     const rand = mulberry32(4242);
-    for (let i = 0; i < 26; i++) {
-      const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(14 + rand() * 30, 10 + rand() * 20), this.cloudMat);
-      m.rotation.x = -Math.PI / 2;
-      m.position.set((rand() - 0.5) * 460, 80 + rand() * 8, (rand() - 0.5) * 460);
-      this.clouds.add(m);
+    for (let i = 0; i < 22; i++) {
+      // each cloud is a cluster of flat boxes merged into ONE geometry (one draw call)
+      const pos = [], norm = [], ind = [];
+      const parts = 2 + (rand() * 4) | 0;
+      for (let k = 0; k < parts; k++) {
+        const box = new THREE.BoxGeometry(8 + rand() * 16, 1.6, 6 + rand() * 12);
+        box.translate((rand() - 0.5) * 18, (rand() - 0.5) * 1.5, (rand() - 0.5) * 14);
+        const off = pos.length / 3;
+        pos.push(...box.getAttribute('position').array);
+        norm.push(...box.getAttribute('normal').array);
+        for (let j = 0; j < box.index.count; j++) ind.push(box.index.array[j] + off);
+        box.dispose();
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(norm, 3));
+      geo.setIndex(ind);
+      const cloud = new THREE.Mesh(geo, this.cloudMat);
+      cloud.position.set((rand() - 0.5) * 460, 82 + rand() * 8, (rand() - 0.5) * 460);
+      this.clouds.add(cloud);
     }
     this.scene.add(this.clouds);
   }
@@ -308,8 +447,10 @@ class Game {
 
   applyFog() {
     const far = this.renderDist * CHUNK;
-    this.scene.fog.near = far * 0.6;
-    this.scene.fog.far = far * 1.02;
+    this.fogNear = far * 0.6;
+    this.fogFar = far * 1.02;
+    this.scene.fog.near = this.fogNear;
+    this.scene.fog.far = this.fogFar;
     // keep the far plane fixed so sun, moon and stars (radius ~190) never clip
     this.camera.far = 400;
     this.camera.updateProjectionMatrix();
@@ -332,6 +473,12 @@ class Game {
     this.updateDayNight(dt);
     this.updatePreview();
     this.updateClouds(dt);
+    this.updateHand(dt);
+
+    // scrolling fluid surfaces
+    const tw = t * 0.001;
+    this.waterTex.offset.set((tw * 0.03) % 1, (tw * 0.018) % 1);
+    this.lavaTex.offset.set((tw * 0.008) % 1, (tw * 0.005) % 1);
 
     // subtle FOV boost while sprinting / flying
     const pl = this.player;
@@ -357,21 +504,39 @@ class Game {
     const sunH = Math.sin(ang);
     this.daylight = Math.max(0, Math.min(1, sunH * 2.2 + 0.15));
     const d = this.daylight;
+    const duskAmt = Math.max(0, 1 - Math.abs(sunH) * 5) * 0.6;
 
-    const sky = this.skyNight.clone().lerp(this.skyDay, d);
-    const duskAmt = Math.max(0, 1 - Math.abs(sunH) * 5) * 0.55;
-    sky.lerp(this.skyDusk, duskAmt);
-    this.scene.background.copy(sky);
-    this.scene.fog.color.copy(sky);
+    // sky dome gradient: zenith + horizon, tinted warm at dawn/dusk
+    const top = new THREE.Color(0x04060f).lerp(new THREE.Color(0x2f74d8), d);
+    const bottom = new THREE.Color(0x0b1026).lerp(new THREE.Color(0xaad4f2), d);
+    bottom.lerp(new THREE.Color(0xf08a45), duskAmt);
+    top.lerp(new THREE.Color(0x5a4a72), duskAmt * 0.4);
+    this.skyMat.uniforms.top.value.copy(top);
+    this.skyMat.uniforms.bottom.value.copy(bottom);
+    this._skyHorizon = bottom;
 
-    this.ambient.intensity = 0.35 + 0.5 * d;
+    this.ambient.intensity = 0.42 + 0.45 * d;
     this.sun.intensity = 0.15 + 0.9 * d;
+    this.sun.color.setHex(0xffffff).lerp(new THREE.Color(0xff9b50), duskAmt);
     this.sun.position.set(Math.cos(ang) * 100, Math.sin(ang) * 100, 40);
     this.stars.material.opacity = 1 - d;
     this.stars.visible = d < 0.9;
-    this.stars.position.copy(this.player ? this.player.pos : new THREE.Vector3());
-    this.skyPivot.position.copy(this.player ? this.player.pos : new THREE.Vector3());
+    const pp = this.player ? this.player.pos : new THREE.Vector3();
+    this.stars.position.copy(pp);
+    this.skyPivot.position.copy(pp);
+    this.skyDome.position.copy(pp);
     this.skyPivot.rotation.z = -ang + Math.PI / 2;
+
+    // fog: dense blue under water, orange in lava, otherwise horizon-coloured
+    const fog = this.scene.fog;
+    if (this.player && this.player.eyeInWater) {
+      fog.color.setHex(0x10306e); fog.near = 1; fog.far = 16;
+    } else if (this.player && this.player.eyeInLava) {
+      fog.color.setHex(0xd85a10); fog.near = 0.1; fog.far = 3;
+    } else {
+      fog.color.copy(bottom);
+      fog.near = this.fogNear; fog.far = this.fogFar;
+    }
 
     const mins = ((this.timeOfDay * 24 + 6) % 24);
     const hh = String(mins | 0).padStart(2, '0');
@@ -391,6 +556,7 @@ class Game {
   // Short tap / right-click: attack mob, use block, place block, or eat
   tapAction(sx, sy) {
     if (this.paused || this.player.dead) return;
+    this.swingHand(true);
     const ndc = new THREE.Vector2((sx / innerWidth) * 2 - 1, -(sy / innerHeight) * 2 + 1);
     this._raycaster.setFromCamera(ndc, this.camera);
 

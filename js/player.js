@@ -57,6 +57,7 @@ class Player {
     this.inWater = feet === B.WATER || eye === B.WATER;
     this.eyeInWater = eye === B.WATER;
     this.inLava = feet === B.LAVA || eye === B.LAVA;
+    this.eyeInLava = eye === B.LAVA;
 
     // desired horizontal velocity from input, rotated by yaw
     const speed = this.flying ? 9 : (this.inWater ? 2.2 : (this.sprint ? 5.6 : 4.2));
@@ -336,7 +337,7 @@ class Controls {
       g._raycaster.setFromCamera(new THREE.Vector2(0, 0), g.camera);
       const mob = g.mobs.raycastMob(g._raycaster);
       if (mob) {
-        if (this.attackCd <= 0) { mob.hurt(5, g.player.pos); this.attackCd = 0.45; }
+        if (this.attackCd <= 0) { mob.hurt(5, g.player.pos); this.attackCd = 0.45; g.swingHand(true); }
         this.breakTarget = null;
       } else {
         const hit = g.raycastScreen(cx, cy);
@@ -352,6 +353,7 @@ class Controls {
           const bt = this.breakTarget;
           bt.hit = hit;
           bt.progress += dt;
+          g.swingHand();                  // keep the hand swinging while digging
           if (bt.progress >= bt.need) {
             g.breakBlock(bt.hit);
             this.breakTarget = null;      // next frame re-targets automatically
@@ -367,6 +369,7 @@ class Controls {
       this.breakTarget = null;
     }
     ring.style.display = showRing ? 'block' : 'none';
+    g.setCrack(this.breakTarget);
   }
 
   // ---------- keyboard / mouse (desktop) ----------

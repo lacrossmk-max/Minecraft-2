@@ -227,6 +227,48 @@ function buildAtlas(seed) {
     return [0, 0, 0, 0];
   });
 
+  // 40..43: crack overlay stages (random cracks radiating from the centre)
+  for (let s = 0; s < 4; s++) {
+    const [tx, ty] = tilePos(40 + s);
+    const cracks = 3 + s * 2;
+    for (let k = 0; k < cracks; k++) {
+      let x = 6 + (rand() * 5) | 0, y = 6 + (rand() * 5) | 0;
+      let dx = rand() < 0.5 ? 1 : -1, dy = rand() < 0.5 ? 1 : -1;
+      const len = 3 + s * 2 + (rand() * 3) | 0;
+      for (let j = 0; j < len; j++) {
+        px(tx, ty, Math.max(0, Math.min(15, x)), Math.max(0, Math.min(15, y)), 15, 15, 15, 190);
+        if (rand() < 0.6) x += dx; else y += dy;
+        if (rand() < 0.2) dx = -dx;
+        if (rand() < 0.2) dy = -dy;
+      }
+    }
+  }
+
+  return cv;
+}
+
+// 64x64 scrolling texture for water / lava surfaces
+function makeFluidCanvas(kind, seed = 1) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 64;
+  const ctx = cv.getContext('2d');
+  const rand = mulberry32(seed ^ (kind === 'water' ? 0x77A7E5 : 0x1AFA9));
+  const base = kind === 'water' ? [36, 86, 194] : [198, 72, 14];
+  const blob = kind === 'water' ? [66, 128, 228] : [250, 186, 52];
+  ctx.fillStyle = `rgb(${base[0]},${base[1]},${base[2]})`;
+  ctx.fillRect(0, 0, 64, 64);
+  for (let y = 0; y < 64; y += 2) for (let x = 0; x < 64; x += 2) {
+    const j = (rand() - 0.5) * 22;
+    ctx.fillStyle = `rgb(${base[0] + j | 0},${base[1] + j | 0},${base[2] + j | 0})`;
+    ctx.fillRect(x, y, 2, 2);
+  }
+  for (let i = 0; i < 26; i++) {
+    const r = 2 + rand() * 5;
+    ctx.fillStyle = `rgba(${blob[0]},${blob[1]},${blob[2]},${0.25 + rand() * 0.3})`;
+    ctx.beginPath();
+    ctx.arc(rand() * 64, rand() * 64, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
   return cv;
 }
 

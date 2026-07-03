@@ -116,6 +116,8 @@
     z-index:20; pointer-events:none; }
   #water-tint { position:absolute; inset:0; background:rgba(20,60,180,.3); display:none;
     z-index:9; pointer-events:none; }
+  #vignette { position:absolute; inset:0; pointer-events:none; z-index:8;
+    background:radial-gradient(ellipse at center, transparent 58%, rgba(0,0,10,.28) 100%); }
 </style>
 </head>
 <body>
@@ -140,6 +142,7 @@
   <button class="tbtn" id="btn-pause">⏸</button>
 </div>
 
+<div id="vignette"></div>
 <div id="water-tint"></div>
 <div id="damage-flash"></div>
 <div id="msg-toast"></div>
