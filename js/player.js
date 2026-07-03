@@ -141,8 +141,11 @@ class Player {
       }
     }
 
-    // camera
-    this.camera.position.copy(this.eyePos());
+    // camera — eye height is smoothed so 1-block step-ups glide instead of snapping
+    const eyeY = this.pos.y + EYE;
+    if (this.viewY === undefined || Math.abs(eyeY - this.viewY) > 2.5) this.viewY = eyeY;
+    else this.viewY += (eyeY - this.viewY) * Math.min(1, dt * 13);
+    this.camera.position.set(this.pos.x, this.viewY, this.pos.z);
     this.camera.rotation.set(0, 0, 0);
     this.camera.rotateY(this.yaw);
     this.camera.rotateX(this.pitch);

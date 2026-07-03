@@ -2,8 +2,9 @@
 'use strict';
 
 const MOB_DEFS = {
-  pig:    { w: 0.8, h: 0.9, speed: 1.4, health: 10, color: 0xeda3a8, max: 6 },
-  zombie: { w: 0.6, h: 1.8, speed: 2.4, health: 20, color: 0x4a7a3a, max: 8 },
+  pig:      { w: 0.8, h: 0.9, speed: 1.4, health: 10, color: 0xeda3a8, max: 6 },
+  zombie:   { w: 0.6, h: 1.8, speed: 2.4, health: 20, color: 0x4a7a3a, max: 8 },
+  villager: { w: 0.6, h: 1.9, speed: 1.1, health: 20, color: 0x8a6c46, max: 4 },
 };
 
 class Mob {
@@ -51,6 +52,16 @@ class Mob {
         this.limbs.push(limb(0.18, 0.35, 0.18, x, 0.35, z, dark));
         this.limbPhase.push(i === 0 || i === 3 ? 0 : Math.PI);   // diagonal gait
       });
+    } else if (this.type === 'villager') {
+      const skin = new THREE.MeshLambertMaterial({ color: 0xd6a77a });
+      box(0.52, 0.8, 0.34, 0, 1.1, 0);                // brown robe torso
+      box(0.44, 0.5, 0.3, 0, 0.45, 0, dark);          // robe skirt
+      box(0.4, 0.4, 0.4, 0, 1.75, 0, skin);           // head
+      box(0.08, 0.16, 0.08, 0, 1.68, -0.23, skin);    // the nose
+      box(0.5, 0.16, 0.2, 0, 1.15, -0.2);             // folded arms
+      this.limbs.push(limb(0.18, 0.45, 0.18, -0.12, 0.45, 0, dark));
+      this.limbs.push(limb(0.18, 0.45, 0.18, 0.12, 0.45, 0, dark));
+      this.limbPhase.push(0, Math.PI);
     } else {
       const pants = new THREE.MeshLambertMaterial({ color: 0x3a4a8a });
       box(0.5, 0.7, 0.3, 0, 1.05, 0);                 // torso
@@ -61,6 +72,7 @@ class Mob {
       this.limbs.push(limb(0.2, 0.7, 0.2, 0.13, 0.7, 0, pants));
       this.limbPhase.push(0, Math.PI);
     }
+    g.traverse(o => { if (o.isMesh) o.castShadow = true; });
     return g;
   }
 
@@ -69,8 +81,10 @@ class Mob {
   }
   collides(px, py, pz) {
     const hw = this.def.w / 2;
+    // samples at the very box edges — otherwise mobs sink into the ground
+    // a little each frame and get snapped back up (visible jitter)
     for (const dx of [-hw, hw]) for (const dz of [-hw, hw])
-      for (const dy of [0.05, this.def.h - 0.05])
+      for (const dy of [0.001, this.def.h * 0.55, this.def.h - 0.001])
         if (this.solidAt(px + dx, py + dy, pz + dz)) return true;
     return false;
   }
@@ -213,6 +227,18 @@ class MobManager {
 
   trySpawn() {
     const g = this.game;
+    // villagers stroll around their village during the day
+    const village = g.world.villageNear(g.player.pos.x, g.player.pos.z, 56);
+    if (village && g.daylight > 0.3 && this.count('villager') < MOB_DEFS.villager.max) {
+      const hut = village.huts[(Math.random() * village.huts.length) | 0];
+      const x = hut.x + ((Math.random() * 12) | 0) - 6;
+      const z = hut.z + ((Math.random() * 12) | 0) - 6;
+      const y = g.world.surfaceHeight(x, z) + 1;
+      if (y > WATER_Y && isSolid(g.world.getBlock(x, y - 1, z))) {
+        this.mobs.push(new Mob(g, 'villager', x + 0.5, y, z + 0.5));
+        return;
+      }
+    }
     const night = g.daylight < 0.25;
     const type = night ? 'zombie' : 'pig';
     if (this.count(type) >= MOB_DEFS[type].max) return;

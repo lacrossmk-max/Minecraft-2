@@ -183,6 +183,11 @@ class UI {
       g.sound.enabled = !g.sound.enabled;
       $('btn-sound').textContent = 'Sound: ' + (g.sound.enabled ? 'An' : 'Aus');
     });
+    $('btn-shadow').addEventListener('pointerdown', () => {
+      g.shadowsOn = !g.shadowsOn;
+      g.applyShadows();
+      $('btn-shadow').textContent = 'Schatten: ' + (g.shadowsOn ? 'An' : 'Aus');
+    });
 
     // title screen
     let mode = 'survival';

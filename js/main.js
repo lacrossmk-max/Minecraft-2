@@ -86,6 +86,12 @@ class Game {
     this.canvas = document.getElementById('game-canvas');
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // the terrain is static, so re-rendering the shadow map every frame is
+    // wasted work — refresh it a few times per second instead
+    this.renderer.shadowMap.autoUpdate = false;
+    this.shadowsOn = true;
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 400);
     this.sound = new Sound();
@@ -94,7 +100,8 @@ class Game {
     this.running = false;
     this.renderDist = 4;
     this.timeOfDay = 0.3;               // 0..1 (0.25 = noon-ish morning start)
-    this.dayLength = 600;               // seconds per full day
+    this.dayLength = 1200;              // seconds per full day (20 min, like the classics)
+    this.weather = { type: 'clear', t: 90 + Math.random() * 90 };
     this.daylight = 1;
     this.inventory = new Map();         // survival: item id -> count
     this.tnt = [];                      // active {x,y,z,t,mesh}
@@ -103,6 +110,7 @@ class Game {
     this.controls = new Controls(this);
     this._raycaster = new THREE.Raycaster();
     this._setupSky();
+    this._setupWeather();
     this._resize();
     addEventListener('resize', () => this._resize());
     setInterval(() => { if (this.running && !this.paused) this.save(); }, 30000);
@@ -118,7 +126,24 @@ class Game {
     this.scene.fog = new THREE.Fog(0x87ceeb, 30, 120);
     this.ambient = new THREE.AmbientLight(0xffffff, 0.7);
     this.sun = new THREE.DirectionalLight(0xffffff, 1.0);
-    this.scene.add(this.ambient, this.sun);
+    // sun shadows: a shadow box that follows the player
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(1024, 1024);
+    const sc = this.sun.shadow.camera;
+    sc.near = 10; sc.far = 280;
+    sc.left = sc.bottom = -60; sc.right = sc.top = 60;
+    this.sun.shadow.bias = -0.0004;
+    this.sunTarget = new THREE.Object3D();
+    this.sun.target = this.sunTarget;
+    this.scene.add(this.ambient, this.sun, this.sunTarget);
+
+    // pool of point lights assigned to the nearest glowstone / lava sources
+    this.lightPool = [];
+    for (let i = 0; i < 5; i++) {
+      const l = new THREE.PointLight(0xffc27a, 0, 15, 1.7);
+      this.scene.add(l);
+      this.lightPool.push(l);
+    }
 
     // gradient sky dome (zenith -> horizon), follows the player
     this.skyMat = new THREE.ShaderMaterial({
@@ -403,6 +428,130 @@ class Game {
     this.crack.visible = true;
   }
 
+  // ---------------- weather (rain / snow / thunder) ----------------
+  _setupWeather() {
+    // rain: short vertical line segments falling around the player
+    const nR = 280;
+    this.rainDrops = new Float32Array(nR * 3);
+    for (let i = 0; i < nR; i++) {
+      this.rainDrops.set([(Math.random() - 0.5) * 36, Math.random() * 24 - 4, (Math.random() - 0.5) * 36], i * 3);
+    }
+    const rGeo = new THREE.BufferGeometry();
+    rGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nR * 6), 3));
+    this.rain = new THREE.LineSegments(rGeo,
+      new THREE.LineBasicMaterial({ color: 0x9db8e0, transparent: true, opacity: 0.45 }));
+    this.rain.frustumCulled = false; this.rain.visible = false;
+    // snow: drifting points
+    const nS = 350;
+    this.snowFlakes = new Float32Array(nS * 3);
+    for (let i = 0; i < nS; i++) {
+      this.snowFlakes.set([(Math.random() - 0.5) * 36, Math.random() * 24 - 4, (Math.random() - 0.5) * 36], i * 3);
+    }
+    const sGeo = new THREE.BufferGeometry();
+    sGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nS * 3), 3));
+    this.snow = new THREE.Points(sGeo,
+      new THREE.PointsMaterial({ color: 0xffffff, size: 0.14, transparent: true, opacity: 0.9 }));
+    this.snow.frustumCulled = false; this.snow.visible = false;
+    this.scene.add(this.rain, this.snow);
+  }
+
+  updateWeather(dt) {
+    const w = this.weather;
+    w.t -= dt;
+    if (w.t <= 0) {
+      const r = Math.random();
+      const prev = w.type;
+      w.type = r < 0.55 ? 'clear' : (r < 0.85 ? 'rain' : 'storm');
+      w.t = 90 + Math.random() * 150;
+      if (w.type !== 'clear' && prev === 'clear') {
+        this.toast(w.type === 'storm' ? 'Ein Gewitter zieht auf …' : 'Es beginnt zu regnen …', 2500);
+      }
+    }
+    // smooth strength for lighting/fog effects
+    const target = w.type === 'storm' ? 1 : (w.type === 'rain' ? 0.6 : 0);
+    this.rainAmt = (this.rainAmt || 0) + (target - (this.rainAmt || 0)) * Math.min(1, dt * 0.5);
+
+    const biome = this.world.columnInfo(Math.floor(this.player.pos.x), Math.floor(this.player.pos.z)).biome;
+    const raining = w.type !== 'clear' && biome !== 'desert';
+    const snowing = raining && biome === 'snow';
+    this.rain.visible = raining && !snowing;
+    this.snow.visible = snowing;
+    if (raining) this._updatePrecip(dt, snowing);
+
+    // thunder flash + boom during storms
+    this._flashT = Math.max(0, (this._flashT || 0) - dt);
+    if (w.type === 'storm') {
+      this._thunderT = (this._thunderT ?? 5) - dt;
+      if (this._thunderT <= 0) {
+        this._thunderT = 5 + Math.random() * 9;
+        this._flashT = 0.22;
+        this.sound.play('boom');
+      }
+    }
+  }
+
+  _updatePrecip(dt, snow) {
+    const p = this.player.pos;
+    if (snow) {
+      const attr = this.snow.geometry.getAttribute('position');
+      const f = this.snowFlakes;
+      const t = performance.now() * 0.001;
+      for (let i = 0; i < f.length; i += 3) {
+        f[i + 1] -= 3.2 * dt;
+        f[i] += Math.sin(t + i) * dt * 0.5;
+        if (f[i + 1] < -4) { f[i + 1] = 20; f[i] = (Math.random() - 0.5) * 36; f[i + 2] = (Math.random() - 0.5) * 36; }
+        attr.setXYZ(i / 3, f[i], f[i + 1], f[i + 2]);
+      }
+      attr.needsUpdate = true;
+      this.snow.position.copy(p);
+    } else {
+      const attr = this.rain.geometry.getAttribute('position');
+      const d = this.rainDrops;
+      for (let i = 0; i < d.length; i += 3) {
+        d[i + 1] -= 26 * dt;
+        if (d[i + 1] < -4) { d[i + 1] = 20; d[i] = (Math.random() - 0.5) * 36; d[i + 2] = (Math.random() - 0.5) * 36; }
+        const v = (i / 3) * 2;
+        attr.setXYZ(v, d[i], d[i + 1], d[i + 2]);
+        attr.setXYZ(v + 1, d[i], d[i + 1] + 0.65, d[i + 2]);
+      }
+      attr.needsUpdate = true;
+      this.rain.position.copy(p);
+    }
+  }
+
+  // ---------------- block lights (glowstone / lava) ----------------
+  updateBlockLights(dt) {
+    this._lightT = (this._lightT || 0) - dt;
+    if (this._lightT > 0) return;
+    this._lightT = 0.3;
+    const p = this.player.pos;
+    const near = [];
+    for (const arr of this.world.lightSources.values()) {
+      for (const s of arr) {
+        const d2 = (s[0] - p.x) ** 2 + (s[1] - p.y) ** 2 + (s[2] - p.z) ** 2;
+        if (d2 < 1600) near.push([d2, s]);
+      }
+    }
+    near.sort((a, b) => a[0] - b[0]);
+    for (let i = 0; i < this.lightPool.length; i++) {
+      const l = this.lightPool[i];
+      if (i < near.length) {
+        const s = near[i][1];
+        l.position.set(s[0], s[1], s[2]);
+        l.color.setHex(s[3] === 1 ? 0xffc27a : 0xff7733);
+        l.intensity = s[3] === 1 ? 1.6 : 1.1;
+      } else {
+        l.intensity = 0;
+      }
+    }
+  }
+
+  applyShadows() {
+    this.renderer.shadowMap.enabled = this.shadowsOn;
+    this.sun.castShadow = this.shadowsOn;
+    this.scene.traverse(o => { if (o.isMesh && o.material) o.material.needsUpdate = true; });
+  }
+
   // ---------------- clouds ----------------
   _setupClouds() {
     this.clouds = new THREE.Group();
@@ -467,10 +616,13 @@ class Game {
     this.controls.update(dt);
     this.player.update(dt, this);
     this.world.update(this.player.pos.x, this.player.pos.z, this.renderDist, 1);
+    this.world.animateRising(dt);
     this.mobs.update(dt);
     this.particles.update(dt);
     this.updateTnt(dt);
+    this.updateWeather(dt);
     this.updateDayNight(dt);
+    this.updateBlockLights(dt);
     this.updatePreview();
     this.updateClouds(dt);
     this.updateHand(dt);
@@ -489,11 +641,47 @@ class Game {
       this.camera.updateProjectionMatrix();
     }
 
+    // throttled shadow map refresh (terrain is static, ~7 Hz is plenty)
+    if (this.shadowsOn) {
+      this._shadowT = (this._shadowT || 0) - dt;
+      if (this._shadowT <= 0) { this._shadowT = 0.14; this.renderer.shadowMap.needsUpdate = true; }
+    }
+    // auto-disable shadows on devices that can't keep up
+    this._fpsAcc = (this._fpsAcc || 0) + dt; this._fpsN = (this._fpsN || 0) + 1;
+    if (this._fpsAcc > 4) {
+      const fps = this._fpsN / this._fpsAcc;
+      this._fpsAcc = 0; this._fpsN = 0;
+      if (fps < 24 && this.shadowsOn && !this._shadowAutoOff) {
+        this._shadowAutoOff = true;
+        this.shadowsOn = false;
+        this.applyShadows();
+        document.getElementById('btn-shadow').textContent = 'Schatten: Aus';
+        this.toast('Schatten deaktiviert (Leistung)', 2500);
+      }
+    }
+
     document.getElementById('water-tint').style.display = this.player.eyeInWater ? 'block' : 'none';
     this.ui.refreshStatus();
     const p = this.player.pos;
+
+    // village compass (updated once per second)
+    this._villT = (this._villT || 0) - dt;
+    if (this._villT <= 0) {
+      this._villT = 1;
+      const v = this.world.villageNear(p.x, p.z, 350);
+      if (v) {
+        const dx = v.x - p.x, dz = v.z - p.z;
+        const dist = Math.hypot(dx, dz) | 0;
+        if (dist <= 28) this._villTxt = '  ·  🏘 Dorf';
+        else {
+          const dirs = ['N', 'NO', 'O', 'SO', 'S', 'SW', 'W', 'NW'];
+          const a = (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
+          this._villTxt = `  ·  🏘 ${dist}m ${dirs[Math.round(a / 45) % 8]}`;
+        }
+      } else this._villTxt = '';
+    }
     document.getElementById('info-top').textContent =
-      `X ${p.x | 0}  Y ${p.y | 0}  Z ${p.z | 0}`;
+      `X ${p.x | 0}  Y ${p.y | 0}  Z ${p.z | 0}${this._villTxt || ''}`;
 
     this.renderer.render(this.scene, this.camera);
   }
@@ -506,28 +694,40 @@ class Game {
     const d = this.daylight;
     const duskAmt = Math.max(0, 1 - Math.abs(sunH) * 5) * 0.6;
 
-    // sky dome gradient: zenith + horizon, tinted warm at dawn/dusk
+    const rainAmt = (this.rainAmt || 0);
+    const flash = Math.max(0, (this._flashT || 0)) / 0.22;
+
+    // sky dome gradient: zenith + horizon, tinted warm at dawn/dusk, grey in rain
     const top = new THREE.Color(0x04060f).lerp(new THREE.Color(0x2f74d8), d);
     const bottom = new THREE.Color(0x0b1026).lerp(new THREE.Color(0xaad4f2), d);
     bottom.lerp(new THREE.Color(0xf08a45), duskAmt);
     top.lerp(new THREE.Color(0x5a4a72), duskAmt * 0.4);
+    const grey = new THREE.Color(0x6e7d8a);
+    top.lerp(grey, rainAmt * 0.5 * Math.max(0.25, d));
+    bottom.lerp(grey, rainAmt * 0.55 * Math.max(0.25, d));
+    if (flash > 0) { top.lerp(new THREE.Color(0xffffff), flash * 0.7); bottom.lerp(new THREE.Color(0xffffff), flash * 0.7); }
     this.skyMat.uniforms.top.value.copy(top);
     this.skyMat.uniforms.bottom.value.copy(bottom);
     this._skyHorizon = bottom;
 
-    this.ambient.intensity = 0.42 + 0.45 * d;
-    this.sun.intensity = 0.15 + 0.9 * d;
+    this.ambient.intensity = (0.42 + 0.45 * d) * (1 - rainAmt * 0.28) + flash * 1.6;
+    this.sun.intensity = (0.15 + 0.9 * d) * (1 - rainAmt * 0.5);
     this.sun.color.setHex(0xffffff).lerp(new THREE.Color(0xff9b50), duskAmt);
-    this.sun.position.set(Math.cos(ang) * 100, Math.sin(ang) * 100, 40);
-    this.stars.material.opacity = 1 - d;
-    this.stars.visible = d < 0.9;
+    // clouds react to weather
+    this.cloudMat.color.setHex(0xffffff).lerp(grey, rainAmt * 0.8);
+    this.stars.material.opacity = (1 - d) * (1 - rainAmt);
+    this.stars.visible = d < 0.9 && rainAmt < 0.9;
     const pp = this.player ? this.player.pos : new THREE.Vector3();
     this.stars.position.copy(pp);
     this.skyPivot.position.copy(pp);
     this.skyDome.position.copy(pp);
     this.skyPivot.rotation.z = -ang + Math.PI / 2;
 
-    // fog: dense blue under water, orange in lava, otherwise horizon-coloured
+    // sun light + shadow box follow the player
+    this.sun.position.set(pp.x + Math.cos(ang) * 120, Math.max(26, sunH * 120), pp.z + 42);
+    this.sunTarget.position.copy(pp);
+
+    // fog: dense blue under water, orange in lava, closer in rain, else horizon-coloured
     const fog = this.scene.fog;
     if (this.player && this.player.eyeInWater) {
       fog.color.setHex(0x10306e); fog.near = 1; fog.far = 16;
@@ -535,7 +735,8 @@ class Game {
       fog.color.setHex(0xd85a10); fog.near = 0.1; fog.far = 3;
     } else {
       fog.color.copy(bottom);
-      fog.near = this.fogNear; fog.far = this.fogFar;
+      fog.near = this.fogNear * (1 - rainAmt * 0.25);
+      fog.far = this.fogFar * (1 - rainAmt * 0.22);
     }
 
     const mins = ((this.timeOfDay * 24 + 6) % 24);

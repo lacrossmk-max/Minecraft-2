@@ -1,7 +1,7 @@
 // ---- World: chunk generation, storage, meshing ----
 'use strict';
 
-const CHUNK = 16, HEIGHT = 64, WATER_Y = 27;
+const CHUNK = 16, HEIGHT = 64, WATER_Y = 27, VCELL = 144;
 
 const FACES = [
   { dir: [1, 0, 0], shade: 0.72, texIdx: 2,
@@ -29,6 +29,10 @@ class World {
     this.meshes = new Map();   // "cx,cz" -> {opaque, alpha, water}
     this.dirty = new Set();    // chunk keys needing remesh
     this.edits = new Map();    // "x,y,z" -> block id (player modifications)
+    this.lightSources = new Map();  // chunk key -> [[x,y,z,type], ...]
+    this.everMeshed = new Set();    // chunks that were meshed at least once
+    this.rising = [];               // freshly loaded chunks animating in
+    this._villageCache = new Map();
   }
 
   key(cx, cz) { return cx + ',' + cz; }
@@ -53,7 +57,53 @@ class World {
 
   isCave(x, y, z) {
     if (y <= 2) return false;
-    return this.noiseCave.noise3(x * 0.085, y * 0.11, z * 0.085) > 0.58;
+    // lower threshold = more caves; surface breaches act as entrances
+    return this.noiseCave.noise3(x * 0.085, y * 0.11, z * 0.085) > 0.545;
+  }
+
+  // ---------- villages ----------
+  // deterministic village per grid cell (VCELL x VCELL blocks), on flat-ish land
+  villageInfo(cellX, cellZ) {
+    const ck = cellX + ',' + cellZ;
+    if (this._villageCache.has(ck)) return this._villageCache.get(ck);
+    let v = null;
+    const r = hash2(cellX * 7 + 3, cellZ * 11 - 5, this.seed ^ 0x51A11);
+    if (r < 0.42) {
+      const jx = hash2(cellX * 13, cellZ * 17, this.seed ^ 0xABC);
+      const jz = hash2(cellX * 19, cellZ * 23, this.seed ^ 0xDEF);
+      const cx = cellX * VCELL + 30 + Math.floor(jx * (VCELL - 60));
+      const cz = cellZ * VCELL + 30 + Math.floor(jz * (VCELL - 60));
+      const { h, biome } = this.columnInfo(cx, cz);
+      if (h > WATER_Y + 1 && h < 44 && (biome === 'plains' || biome === 'forest')) {
+        const huts = [];
+        const n = 3 + Math.floor(hash2(cx, cz, this.seed ^ 7) * 3);
+        for (let i = 0; i < n; i++) {
+          const a = (i / n) * Math.PI * 2 + hash2(cx + i, cz - i, this.seed) * 1.2;
+          const dist = 9 + hash2(cx - i, cz + i, this.seed ^ 3) * 12;
+          const hx = Math.round(cx + Math.cos(a) * dist);
+          const hz = Math.round(cz + Math.sin(a) * dist);
+          const hi = this.columnInfo(hx, hz);
+          if (hi.h > WATER_Y && Math.abs(hi.h - h) <= 5) {
+            huts.push({ x: hx, z: hz, y: hi.h + 1 });
+          }
+        }
+        if (huts.length >= 2) v = { x: cx, z: cz, huts };
+      }
+    }
+    this._villageCache.set(ck, v);
+    return v;
+  }
+
+  villageNear(x, z, maxDist) {
+    const cX = Math.floor(x / VCELL), cZ = Math.floor(z / VCELL);
+    let best = null, bestD = maxDist;
+    for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) {
+      const v = this.villageInfo(cX + dx, cZ + dz);
+      if (!v) continue;
+      const d = Math.hypot(v.x - x, v.z - z);
+      if (d < bestD) { best = v; bestD = d; }
+    }
+    return best;
   }
 
   treeAt(x, z) {
@@ -139,6 +189,43 @@ class World {
           put(t.x, t.h + th + 1, t.z, B.LEAVES, true);
           for (let dy = 1; dy <= th; dy++) put(t.x, t.h + dy, t.z, B.LOG);
         }
+      }
+    }
+
+    // villages: build huts that overlap this chunk
+    const putV = (wx, wy, wz, id, onlyAir) => {
+      if (wy < 1 || wy >= HEIGHT) return;
+      const lx = wx - x0, lz = wz - z0;
+      if (lx < 0 || lx >= CHUNK || lz < 0 || lz >= CHUNK) return;
+      const i = this.idx(lx, wy, lz);
+      if (onlyAir && data[i] !== B.AIR) return;
+      data[i] = id;
+    };
+    const c0x = Math.floor((x0 - 24) / VCELL), c1x = Math.floor((x0 + CHUNK + 24) / VCELL);
+    const c0z = Math.floor((z0 - 24) / VCELL), c1z = Math.floor((z0 + CHUNK + 24) / VCELL);
+    for (let vcx = c0x; vcx <= c1x; vcx++) for (let vcz = c0z; vcz <= c1z; vcz++) {
+      const v = this.villageInfo(vcx, vcz);
+      if (!v) continue;
+      for (const hut of v.huts) {
+        const { x: hx, y: hy, z: hz } = hut;   // hy = interior floor level
+        for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
+          putV(hx + dx, hy - 1, hz + dz, B.PLANKS);           // floor
+          for (let f = 2; f <= 5; f++) putV(hx + dx, hy - f, hz + dz, B.COBBLE, true); // foundation
+          putV(hx + dx, hy + 3, hz + dz, B.PLANKS);           // roof
+          for (let wy = hy; wy <= hy + 2; wy++) {
+            const edge = Math.abs(dx) === 2 || Math.abs(dz) === 2;
+            if (!edge) { putV(hx + dx, wy, hz + dz, B.AIR); continue; }  // carve interior
+            const corner = Math.abs(dx) === 2 && Math.abs(dz) === 2;
+            if (dz === 2 && dx === 0 && wy <= hy + 1) { putV(hx + dx, wy, hz + dz, B.AIR); continue; } // door
+            if (wy === hy + 1 && !corner && (dz === -2 || Math.abs(dx) === 2) && (dx === 0 || dz === 0)) {
+              putV(hx + dx, wy, hz + dz, B.GLASS); continue;  // windows
+            }
+            putV(hx + dx, wy, hz + dz, corner ? B.LOG : B.PLANKS);
+          }
+          for (let wy = hy + 4; wy <= hy + 6; wy++) putV(hx + dx, wy, hz + dz, B.AIR); // keep roof clear
+        }
+        putV(hx - 1, hy, hz - 1, B.CRAFT);
+        putV(hx, hy + 3, hz, B.GLOWSTONE);                    // roof-centre lamp
       }
     }
 
@@ -243,12 +330,18 @@ class World {
       }
     };
 
+    const srcs = [];   // block light sources in this chunk (for the point-light pool)
+
     for (let ly = 0; ly < HEIGHT; ly++) for (let lz = 0; lz < CHUNK; lz++) for (let lx = 0; lx < CHUNK; lx++) {
       const id = this.chunks.get(this.key(cx, cz))[this.idx(lx, ly, lz)];
       if (!id) continue;
       const def = BLOCKS[id];
       const wx = x0 + lx, wz = z0 + lz;
       const glow = def.glow ? 1.45 : 1;
+      if (id === B.GLOWSTONE) srcs.push([wx + 0.5, ly + 0.5, wz + 0.5, 1]);
+      else if (id === B.LAVA && srcs.length < 12 && this.getBlock(wx, ly + 1, wz) === B.AIR) {
+        srcs.push([wx + 0.5, ly + 1, wz + 0.5, 0]);
+      }
 
       if (def.cross) {
         // two crossed quads
@@ -311,10 +404,13 @@ class World {
       g.computeBoundingSphere();
       const m = new THREE.Mesh(g, this.mats[kind]);
       m.matrixAutoUpdate = false;
+      if (kind === 'opaque') { m.castShadow = true; m.receiveShadow = true; }
+      else if (kind !== 'lava') m.receiveShadow = true;
       this.scene.add(m);
       set[kind] = m;
     }
     this.meshes.set(this.key(cx, cz), set);
+    this.lightSources.set(this.key(cx, cz), srcs);
   }
 
   _newGeoAcc() { return { pos: [], uv: [], col: [], ind: [] }; }
@@ -328,6 +424,7 @@ class World {
       set[kind].geometry.dispose();
     }
     this.meshes.delete(k);
+    this.lightSources.delete(k);
   }
 
   // Called each frame: mesh needed chunks near the player, drop far ones.
@@ -341,10 +438,17 @@ class World {
     wanted.sort((a, b) => a[2] - b[2]);
 
     let done = 0;
-    for (const [cx, cz] of wanted) {
+    for (const [cx, cz, d2] of wanted) {
       const k = this.key(cx, cz);
       if (this.dirty.has(k)) { this.buildMesh(cx, cz); this.dirty.delete(k); done++; }
-      else if (!this.meshes.has(k)) { this.buildMesh(cx, cz); done++; }
+      else if (!this.meshes.has(k)) {
+        const isNew = !this.everMeshed.has(k);
+        this.buildMesh(cx, cz);
+        // rise-in animation for chunks appearing at a distance
+        if (isNew && d2 >= 4) this.rising.push({ k, t: 0 });
+        done++;
+      }
+      this.everMeshed.add(k);
       if (done >= budget) break;
     }
     // unload far meshes
@@ -353,6 +457,24 @@ class World {
       if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > renderDist + 1) this.removeMesh(cx, cz);
     }
     return done;
+  }
+
+  // ease freshly loaded chunks up from below instead of popping in
+  animateRising(dt) {
+    for (let i = this.rising.length - 1; i >= 0; i--) {
+      const r = this.rising[i];
+      r.t += dt;
+      const e = Math.min(1, r.t / 0.45);
+      const y = -7 * (1 - e) * (1 - e);
+      const set = this.meshes.get(r.k);
+      if (set) {
+        for (const kind in set) {
+          set[kind].position.y = y;
+          set[kind].updateMatrix();
+        }
+      }
+      if (e >= 1 || !set) this.rising.splice(i, 1);
+    }
   }
 
   countMissing(px, pz, renderDist) {
