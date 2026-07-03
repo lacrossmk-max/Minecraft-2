@@ -3,18 +3,20 @@
 
 const CHUNK = 16, HEIGHT = 64, WATER_Y = 27, VCELL = 144;
 
+// baked face shades are soft now — real per-face normals let the sun
+// differentiate the sides dynamically through the day
 const FACES = [
-  { dir: [1, 0, 0], shade: 0.72, texIdx: 2,
+  { dir: [1, 0, 0], shade: 0.84, texIdx: 2,
     corners: [{ pos: [1, 1, 1], uv: [0, 1] }, { pos: [1, 0, 1], uv: [0, 0] }, { pos: [1, 1, 0], uv: [1, 1] }, { pos: [1, 0, 0], uv: [1, 0] }] },
-  { dir: [-1, 0, 0], shade: 0.72, texIdx: 2,
+  { dir: [-1, 0, 0], shade: 0.84, texIdx: 2,
     corners: [{ pos: [0, 1, 0], uv: [0, 1] }, { pos: [0, 0, 0], uv: [0, 0] }, { pos: [0, 1, 1], uv: [1, 1] }, { pos: [0, 0, 1], uv: [1, 0] }] },
   { dir: [0, 1, 0], shade: 1.0, texIdx: 0,
     corners: [{ pos: [0, 1, 1], uv: [0, 0] }, { pos: [1, 1, 1], uv: [1, 0] }, { pos: [0, 1, 0], uv: [0, 1] }, { pos: [1, 1, 0], uv: [1, 1] }] },
-  { dir: [0, -1, 0], shade: 0.5, texIdx: 1,
+  { dir: [0, -1, 0], shade: 0.55, texIdx: 1,
     corners: [{ pos: [0, 0, 0], uv: [0, 0] }, { pos: [1, 0, 0], uv: [1, 0] }, { pos: [0, 0, 1], uv: [0, 1] }, { pos: [1, 0, 1], uv: [1, 1] }] },
-  { dir: [0, 0, 1], shade: 0.85, texIdx: 2,
+  { dir: [0, 0, 1], shade: 0.92, texIdx: 2,
     corners: [{ pos: [0, 0, 1], uv: [0, 0] }, { pos: [1, 0, 1], uv: [1, 0] }, { pos: [0, 1, 1], uv: [0, 1] }, { pos: [1, 1, 1], uv: [1, 1] }] },
-  { dir: [0, 0, -1], shade: 0.85, texIdx: 2,
+  { dir: [0, 0, -1], shade: 0.92, texIdx: 2,
     corners: [{ pos: [1, 0, 0], uv: [0, 0] }, { pos: [0, 0, 0], uv: [1, 0] }, { pos: [1, 1, 0], uv: [0, 1] }, { pos: [0, 1, 0], uv: [1, 1] }] },
 ];
 
@@ -353,6 +355,7 @@ class World {
         const a = ao ? ao[i] : 1;
         acc.col.push(shade * a * tr, shade * a * tg, shade * a * tb);
         acc.sw.push(0);
+        acc.nor.push(face.dir[0], face.dir[1], face.dir[2]);
       }
       // flip the quad diagonal through the darker corner pair to avoid AO seams
       if (ao && ao[0] + ao[3] < ao[1] + ao[2]) {
@@ -388,7 +391,7 @@ class World {
           acc.pos.push(wx + a[0], ly, wz + a[2],  wx + b[0], ly, wz + b[2],
                        wx + a[0], ly + 1, wz + a[2],  wx + b[0], ly + 1, wz + b[2]);
           acc.uv.push(tu, tv,  tu + tsi, tv,  tu, tv + tsi,  tu + tsi, tv + tsi);
-          for (let i = 0; i < 4; i++) acc.col.push(0.9, 0.9, 0.9);
+          for (let i = 0; i < 4; i++) { acc.col.push(0.9, 0.9, 0.9); acc.nor.push(0, 1, 0); }
           acc.sw.push(0, 0, 1, 1);           // top vertices wave in the wind
           acc.ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
         }
@@ -431,6 +434,7 @@ class World {
       if (!acc.pos.length) continue;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(acc.pos, 3));
+      g.setAttribute('normal', new THREE.Float32BufferAttribute(acc.nor, 3));
       g.setAttribute('uv', new THREE.Float32BufferAttribute(acc.uv, 2));
       g.setAttribute('color', new THREE.Float32BufferAttribute(acc.col, 3));
       if (kind === 'alpha') g.setAttribute('sway', new THREE.Float32BufferAttribute(acc.sw, 1));
@@ -447,7 +451,7 @@ class World {
     this.lightSources.set(this.key(cx, cz), srcs);
   }
 
-  _newGeoAcc() { return { pos: [], uv: [], col: [], ind: [], sw: [] }; }
+  _newGeoAcc() { return { pos: [], uv: [], col: [], ind: [], sw: [], nor: [] }; }
 
   removeMesh(cx, cz) {
     const k = this.key(cx, cz);

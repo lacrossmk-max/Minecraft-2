@@ -729,9 +729,10 @@ class Game {
     this.skyMat.uniforms.bottom.value.copy(bottom);
     this._skyHorizon = bottom;
 
-    // lower ambient + stronger sun = clearly visible shadows
-    this.ambient.intensity = (0.34 + 0.36 * d) * (1 - rainAmt * 0.28) + flash * 1.6;
-    this.sun.intensity = (0.2 + 1.25 * d) * (1 - rainAmt * 0.55);
+    // ambient + real directional sun (terrain now has normals, so the sun
+    // shades faces by direction and shadows actually darken the ground)
+    this.ambient.intensity = (0.38 + 0.22 * d) * (1 - rainAmt * 0.28) + flash * 1.6;
+    this.sun.intensity = (0.2 + 0.95 * d) * (1 - rainAmt * 0.55);
     this.sun.color.setHex(0xffffff).lerp(new THREE.Color(0xff9b50), duskAmt);
     // clouds react to weather
     this.cloudMat.color.setHex(0xffffff).lerp(grey, rainAmt * 0.8);
