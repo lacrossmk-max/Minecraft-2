@@ -260,6 +260,7 @@ class Game {
     this._setupClouds();
     this._setupHand(tex);
     this._setupCrack(tex);
+    this._setupAmbient();
 
     if (save) {
       this.mode = save.mode;
@@ -540,6 +541,166 @@ class Game {
     }
   }
 
+  // ---------------- ambient particles (fireflies / leaves / bubbles / splashes) ----------------
+  _softDot(rgba) {
+    const cv = document.createElement('canvas'); cv.width = cv.height = 32;
+    const c = cv.getContext('2d');
+    const gr = c.createRadialGradient(16, 16, 0, 16, 16, 16);
+    gr.addColorStop(0, rgba); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = gr; c.fillRect(0, 0, 32, 32);
+    const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
+  _makePoints(n, mat) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+    const pts = new THREE.Points(geo, mat);
+    pts.frustumCulled = false;
+    this.scene.add(pts);
+    return pts;
+  }
+
+  _setupAmbient() {
+    // fireflies: soft additive glowing dots that drift at night
+    this.fireN = 46;
+    this.fireData = [];
+    this.fireflies = this._makePoints(this.fireN, new THREE.PointsMaterial({
+      size: 0.5, map: this._softDot('rgba(190,255,120,1)'), transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, fog: true }));
+    for (let i = 0; i < this.fireN; i++) this.fireData.push({ x: 0, y: -999, z: 0, ph: Math.random() * 6.28, spawned: false });
+
+    // falling leaves: small drifting quads that spawn under tree canopies
+    this.leafN = 40;
+    this.leafData = [];
+    this.leaves = this._makePoints(this.leafN, new THREE.PointsMaterial({
+      size: 0.28, map: this._softDot('rgba(96,150,54,1)'), transparent: true,
+      depthWrite: false, sizeAttenuation: true, fog: true }));
+    for (let i = 0; i < this.leafN; i++) this.leafData.push({ life: 0, x: 0, y: -999, z: 0, vx: 0, vz: 0, ph: 0 });
+
+    // rising bubbles underwater
+    this.bubbleN = 30;
+    this.bubbleData = [];
+    this.bubbles = this._makePoints(this.bubbleN, new THREE.PointsMaterial({
+      size: 0.12, map: this._softDot('rgba(220,240,255,1)'), transparent: true,
+      opacity: 0.8, depthWrite: false, sizeAttenuation: true, fog: false }));
+    for (let i = 0; i < this.bubbleN; i++) this.bubbleData.push({ life: 0, x: 0, y: -999, z: 0 });
+
+    // rain splashes on the ground
+    this.splashN = 40;
+    this.splashData = [];
+    this.splashes = this._makePoints(this.splashN, new THREE.PointsMaterial({
+      size: 0.18, map: this._softDot('rgba(160,190,225,1)'), transparent: true,
+      opacity: 0.6, depthWrite: false, sizeAttenuation: true, fog: true }));
+    for (let i = 0; i < this.splashN; i++) this.splashData.push({ life: 0, x: 0, y: -999, z: 0 });
+  }
+
+  updateAmbient(dt) {
+    const p = this.player.pos, w = this.world;
+    const night = this.daylight < 0.42;
+    const raining = (this.rainAmt || 0) > 0.15;
+    const biome = w.columnInfo(Math.floor(p.x), Math.floor(p.z)).biome;
+
+    // ---- fireflies (night, not raining, warm biomes) ----
+    const fireOn = night && !raining && biome !== 'snow' && biome !== 'desert';
+    const fa = this.fireflies.geometry.getAttribute('position');
+    const t = performance.now() * 0.001;
+    for (let i = 0; i < this.fireN; i++) {
+      const f = this.fireData[i];
+      if (!fireOn) { fa.setXYZ(i, 0, -999, 0); continue; }
+      if (!f.spawned || Math.hypot(f.x - p.x, f.z - p.z) > 26) {
+        const a = Math.random() * 6.28, r = 4 + Math.random() * 16;
+        f.x = p.x + Math.cos(a) * r; f.z = p.z + Math.sin(a) * r;
+        f.y = w.surfaceHeight(Math.floor(f.x), Math.floor(f.z)) + 0.8 + Math.random() * 2.2;
+        f.spawned = true;
+      }
+      f.x += Math.sin(t * 0.7 + f.ph) * dt * 0.5;
+      f.z += Math.cos(t * 0.5 + f.ph * 1.7) * dt * 0.5;
+      f.y += Math.sin(t * 1.3 + f.ph) * dt * 0.35;
+      fa.setXYZ(i, f.x, f.y, f.z);
+    }
+    fa.needsUpdate = true;
+    this.fireflies.material.opacity = fireOn ? 0.6 + 0.4 * Math.sin(t * 3) : 0;
+    this.fireflies.material.size = 0.42 + 0.12 * Math.sin(t * 4);
+
+    // ---- falling leaves (day, near tree canopies) ----
+    const la = this.leaves.geometry.getAttribute('position');
+    this._leafSpawnT = (this._leafSpawnT || 0) - dt;
+    const leavesOn = !raining && this.daylight > 0.3;
+    if (leavesOn && this._leafSpawnT <= 0) {
+      this._leafSpawnT = 0.18;
+      for (let tries = 0; tries < 4; tries++) {
+        const lx = Math.floor(p.x + (Math.random() - 0.5) * 26);
+        const lz = Math.floor(p.z + (Math.random() - 0.5) * 26);
+        const top = w.surfaceHeight(lx, lz);
+        // is there a leaf block overhead with air below it?
+        for (let y = top; y > top - 8 && y > 1; y--) {
+          if (w.getBlock(lx, y, lz) === B.LEAVES && w.getBlock(lx, y - 1, lz) === B.AIR) {
+            const slot = this.leafData.find(d => d.life <= 0);
+            if (slot) {
+              slot.life = 4 + Math.random() * 3;
+              slot.x = lx + Math.random(); slot.y = y - 0.2; slot.z = lz + Math.random();
+              slot.vx = (Math.random() - 0.5) * 0.5; slot.vz = (Math.random() - 0.5) * 0.5;
+              slot.ph = Math.random() * 6.28;
+            }
+            break;
+          }
+        }
+      }
+    }
+    for (let i = 0; i < this.leafN; i++) {
+      const d = this.leafData[i];
+      if (d.life <= 0) { la.setXYZ(i, 0, -999, 0); continue; }
+      d.life -= dt;
+      d.y -= dt * 0.8;
+      d.x += (d.vx + Math.sin(t * 2 + d.ph) * 0.4) * dt;
+      d.z += (d.vz + Math.cos(t * 1.7 + d.ph) * 0.4) * dt;
+      // settle on the ground
+      if (d.y <= w.surfaceHeight(Math.floor(d.x), Math.floor(d.z)) + 0.1) d.life = Math.min(d.life, 0.6);
+      la.setXYZ(i, d.x, d.y, d.z);
+    }
+    la.needsUpdate = true;
+
+    // ---- bubbles underwater ----
+    const ba = this.bubbles.geometry.getAttribute('position');
+    if (this.player.eyeInWater) {
+      if (Math.random() < dt * 20) {
+        const slot = this.bubbleData.find(d => d.life <= 0);
+        if (slot) { slot.life = 1.2; slot.x = p.x + (Math.random() - .5) * 0.8;
+          slot.y = p.y + 1.4 + Math.random() * 0.4; slot.z = p.z + (Math.random() - .5) * 0.8; }
+      }
+    }
+    for (let i = 0; i < this.bubbleN; i++) {
+      const d = this.bubbleData[i];
+      if (d.life <= 0) { ba.setXYZ(i, 0, -999, 0); continue; }
+      d.life -= dt; d.y += dt * 1.6; d.x += Math.sin(t * 5 + i) * dt * 0.15;
+      ba.setXYZ(i, d.x, d.y, d.z);
+    }
+    ba.needsUpdate = true;
+
+    // ---- rain splashes on the ground ----
+    const sa = this.splashes.geometry.getAttribute('position');
+    if (raining && biome !== 'desert' && !this.player.eyeInWater) {
+      const spawns = Math.floor(this.rainAmt * 3) + 1;
+      for (let k = 0; k < spawns; k++) {
+        const slot = this.splashData.find(d => d.life <= 0);
+        if (!slot) break;
+        const sx = Math.floor(p.x + (Math.random() - 0.5) * 20);
+        const sz = Math.floor(p.z + (Math.random() - 0.5) * 20);
+        const sy = w.surfaceHeight(sx, sz) + 1;
+        slot.life = 0.35; slot.x = sx + Math.random(); slot.y = sy + 0.02; slot.z = sz + Math.random();
+      }
+    }
+    for (let i = 0; i < this.splashN; i++) {
+      const d = this.splashData[i];
+      if (d.life <= 0) { sa.setXYZ(i, 0, -999, 0); continue; }
+      d.life -= dt;
+      sa.setXYZ(i, d.x, d.y, d.z);
+    }
+    sa.needsUpdate = true;
+    this.splashes.material.size = 0.1 + 0.2 * (1 - Math.min(1, this.splashData[0] ? this.splashData[0].life / 0.35 : 0));
+  }
+
   // ---------------- block lights (glowstone / lava) ----------------
   updateBlockLights(dt) {
     this._lightT = (this._lightT || 0) - dt;
@@ -644,6 +805,7 @@ class Game {
     this.updateWeather(dt);
     this.updateDayNight(dt);
     this.updateBlockLights(dt);
+    this.updateAmbient(dt);
     this.updatePreview();
     this.updateClouds(dt);
     this.updateHand(dt);
@@ -737,8 +899,10 @@ class Game {
     this.skyDome.position.copy(pp);
     this.skyPivot.rotation.z = -ang + Math.PI / 2;
 
-    // sun light + shadow box follow the player
-    this.sun.position.set(pp.x + Math.cos(ang) * 120, Math.max(26, sunH * 120), pp.z + 42);
+    // sun light + shadow box follow the player. The light MUST sit on the same
+    // side as the visible sun disc (skyPivot places it at -cos(ang) in x), or
+    // shadows fall toward the sun instead of away from it.
+    this.sun.position.set(pp.x - Math.cos(ang) * 120, Math.max(26, sunH * 120), pp.z + 18);
     this.sunTarget.position.copy(pp);
 
     // fog: dense blue under water, orange in lava, closer in rain, else horizon-coloured
