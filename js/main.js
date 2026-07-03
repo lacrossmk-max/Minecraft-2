@@ -86,6 +86,8 @@ class Game {
     this.canvas = document.getElementById('game-canvas');
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: false });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.2;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // the terrain is static, so re-rendering the shadow map every frame is
@@ -154,6 +156,8 @@ class Game {
         void main(){
           float h = clamp(normalize(vP).y, 0.0, 1.0);
           gl_FragColor = vec4(mix(bottom, top, pow(h, 0.55)), 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
         }`,
       side: THREE.BackSide, depthWrite: false, fog: false,
     });
@@ -227,9 +231,20 @@ class Game {
     this.waterTex = fluidTex('water');
     this.lavaTex = fluidTex('lava');
 
+    const alphaMat = new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide });
+    // plants wave in the wind: displace cross-quad top vertices (sway=1)
+    alphaMat.onBeforeCompile = shader => {
+      shader.uniforms.uTime = { value: 0 };
+      shader.vertexShader = 'attribute float sway;\nuniform float uTime;\n' + shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         transformed.x += sway * sin(uTime * 1.7 + position.x * 0.9 + position.z * 0.7) * 0.075;
+         transformed.z += sway * cos(uTime * 1.3 + position.x * 0.7 + position.z * 1.1) * 0.075;`);
+      this._alphaShader = shader;
+    };
     const mats = {
       opaque: new THREE.MeshLambertMaterial({ map: tex, vertexColors: true }),
-      alpha: new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide }),
+      alpha: alphaMat,
       water: new THREE.MeshLambertMaterial({ map: this.waterTex, vertexColors: true, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false }),
       lava: new THREE.MeshBasicMaterial({ map: this.lavaTex, vertexColors: true, side: THREE.DoubleSide }),
     };
@@ -628,10 +643,11 @@ class Game {
     this.updateClouds(dt);
     this.updateHand(dt);
 
-    // scrolling fluid surfaces
+    // scrolling fluid surfaces + wind time for waving plants
     const tw = t * 0.001;
     this.waterTex.offset.set((tw * 0.03) % 1, (tw * 0.018) % 1);
     this.lavaTex.offset.set((tw * 0.008) % 1, (tw * 0.005) % 1);
+    if (this._alphaShader) this._alphaShader.uniforms.uTime.value = tw;
 
     // subtle FOV boost while sprinting / flying
     const pl = this.player;
@@ -647,12 +663,14 @@ class Game {
       this._shadowT = (this._shadowT || 0) - dt;
       if (this._shadowT <= 0) { this._shadowT = 0.14; this.renderer.shadowMap.needsUpdate = true; }
     }
-    // auto-disable shadows on devices that can't keep up
+    // auto-disable shadows on devices that can't keep up — but not during the
+    // first 20 s, where chunk meshing makes every device stutter
+    this._uptime = (this._uptime || 0) + dt;
     this._fpsAcc = (this._fpsAcc || 0) + dt; this._fpsN = (this._fpsN || 0) + 1;
-    if (this._fpsAcc > 4) {
+    if (this._fpsAcc > 5) {
       const fps = this._fpsN / this._fpsAcc;
       this._fpsAcc = 0; this._fpsN = 0;
-      if (fps < 24 && this.shadowsOn && !this._shadowAutoOff) {
+      if (this._uptime > 20 && fps < 19 && this.shadowsOn && !this._shadowAutoOff) {
         this._shadowAutoOff = true;
         this.shadowsOn = false;
         this.applyShadows();
@@ -711,8 +729,9 @@ class Game {
     this.skyMat.uniforms.bottom.value.copy(bottom);
     this._skyHorizon = bottom;
 
-    this.ambient.intensity = (0.42 + 0.45 * d) * (1 - rainAmt * 0.28) + flash * 1.6;
-    this.sun.intensity = (0.15 + 0.9 * d) * (1 - rainAmt * 0.5);
+    // lower ambient + stronger sun = clearly visible shadows
+    this.ambient.intensity = (0.34 + 0.36 * d) * (1 - rainAmt * 0.28) + flash * 1.6;
+    this.sun.intensity = (0.2 + 1.25 * d) * (1 - rainAmt * 0.55);
     this.sun.color.setHex(0xffffff).lerp(new THREE.Color(0xff9b50), duskAmt);
     // clouds react to weather
     this.cloudMat.color.setHex(0xffffff).lerp(grey, rainAmt * 0.8);

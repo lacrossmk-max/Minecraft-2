@@ -79,15 +79,19 @@ class World {
         const n = 3 + Math.floor(hash2(cx, cz, this.seed ^ 7) * 3);
         for (let i = 0; i < n; i++) {
           const a = (i / n) * Math.PI * 2 + hash2(cx + i, cz - i, this.seed) * 1.2;
-          const dist = 9 + hash2(cx - i, cz + i, this.seed ^ 3) * 12;
+          const dist = 10 + hash2(cx - i, cz + i, this.seed ^ 3) * 12;
           const hx = Math.round(cx + Math.cos(a) * dist);
           const hz = Math.round(cz + Math.sin(a) * dist);
           const hi = this.columnInfo(hx, hz);
           if (hi.h > WATER_Y && Math.abs(hi.h - h) <= 5) {
-            huts.push({ x: hx, z: hz, y: hi.h + 1 });
+            const hr = hash2(hx * 3 + 1, hz * 5 - 2, this.seed ^ 0xF00D);
+            const hs = hash2(hx * 7 - 4, hz * 3 + 9, this.seed ^ 0xBEEF);
+            huts.push({ x: hx, z: hz, y: hi.h + 1,
+              rot: (hr * 4) | 0,                              // door faces a random side
+              style: hs < 0.16 ? 2 : (hs < 0.55 ? 1 : 0) });  // wood / cobble / brick
           }
         }
-        if (huts.length >= 2) v = { x: cx, z: cz, huts };
+        if (huts.length >= 2) v = { x: cx, z: cz, y: h + 1, huts };
       }
     }
     this._villageCache.set(ck, v);
@@ -207,25 +211,50 @@ class World {
       const v = this.villageInfo(vcx, vcz);
       if (!v) continue;
       for (const hut of v.huts) {
-        const { x: hx, y: hy, z: hz } = hut;   // hy = interior floor level
-        for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
-          putV(hx + dx, hy - 1, hz + dz, B.PLANKS);           // floor
-          for (let f = 2; f <= 5; f++) putV(hx + dx, hy - f, hz + dz, B.COBBLE, true); // foundation
-          putV(hx + dx, hy + 3, hz + dz, B.PLANKS);           // roof
-          for (let wy = hy; wy <= hy + 2; wy++) {
-            const edge = Math.abs(dx) === 2 || Math.abs(dz) === 2;
-            if (!edge) { putV(hx + dx, wy, hz + dz, B.AIR); continue; }  // carve interior
-            const corner = Math.abs(dx) === 2 && Math.abs(dz) === 2;
-            if (dz === 2 && dx === 0 && wy <= hy + 1) { putV(hx + dx, wy, hz + dz, B.AIR); continue; } // door
-            if (wy === hy + 1 && !corner && (dz === -2 || Math.abs(dx) === 2) && (dx === 0 || dz === 0)) {
-              putV(hx + dx, wy, hz + dz, B.GLASS); continue;  // windows
-            }
-            putV(hx + dx, wy, hz + dz, corner ? B.LOG : B.PLANKS);
-          }
-          for (let wy = hy + 4; wy <= hy + 6; wy++) putV(hx + dx, wy, hz + dz, B.AIR); // keep roof clear
+        const { x: hx, y: hy, z: hz, rot, style } = hut;      // hy = interior floor level
+        // building material sets per style: wood / cobblestone / brick
+        const wallMat = style === 2 ? B.BRICK : (style === 1 ? B.COBBLE : B.PLANKS);
+        const roofMat = style === 0 ? B.COBBLE : B.PLANKS;
+        const [ddx, ddz] = [[0, 1], [1, 0], [0, -1], [-1, 0]][rot];  // door direction
+
+        // flatten a 7x7 apron so doors are never buried by terrain
+        for (let dx = -3; dx <= 3; dx++) for (let dz = -3; dz <= 3; dz++) {
+          const inner = Math.abs(dx) <= 2 && Math.abs(dz) <= 2;
+          putV(hx + dx, hy - 1, hz + dz, inner ? B.PLANKS : B.GRASS);
+          for (let f = 2; f <= 6; f++) putV(hx + dx, hy - f, hz + dz, B.DIRT, true);
+          for (let wy = hy; wy <= hy + 5; wy++) putV(hx + dx, wy, hz + dz, B.AIR);
         }
-        putV(hx - 1, hy, hz - 1, B.CRAFT);
+        // walls, door, windows
+        for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
+          putV(hx + dx, hy + 3, hz + dz, roofMat);            // roof
+          const edge = Math.abs(dx) === 2 || Math.abs(dz) === 2;
+          if (!edge) continue;
+          const corner = Math.abs(dx) === 2 && Math.abs(dz) === 2;
+          for (let wy = hy; wy <= hy + 2; wy++) {
+            if (dx === ddx * 2 && dz === ddz * 2 && wy <= hy + 1) continue;   // door opening
+            if (wy === hy + 1 && !corner && (dx === 0 || dz === 0) && !(dx === ddx * 2 && dz === ddz * 2)) {
+              putV(hx + dx, wy, hz + dz, B.GLASS); continue;  // window on each other side
+            }
+            putV(hx + dx, wy, hz + dz, corner ? B.LOG : wallMat);
+          }
+        }
+        putV(hx - ddx * 1 - (ddz !== 0 ? 1 : 0), hy, hz - ddz * 1 - (ddx !== 0 ? 1 : 0), B.CRAFT);
         putV(hx, hy + 3, hz, B.GLOWSTONE);                    // roof-centre lamp
+        // lantern post beside the door path
+        const px2 = hx + ddx * 3 - ddz, pz2 = hz + ddz * 3 - ddx;
+        putV(px2, hy, pz2, B.LOG); putV(px2, hy + 1, pz2, B.LOG);
+        putV(px2, hy + 2, pz2, B.GLOWSTONE);
+      }
+      // village well at the centre
+      {
+        const { x: wxc, z: wzc, y: wy } = v;
+        for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+          for (let f = 1; f <= 5; f++) putV(wxc + dx, wy - f, wzc + dz, B.COBBLE, true);
+          putV(wxc + dx, wy - 1, wzc + dz, B.COBBLE);
+          const edge = Math.abs(dx) === 1 || Math.abs(dz) === 1;
+          putV(wxc + dx, wy, wzc + dz, edge ? B.COBBLE : B.WATER);
+          for (let cy = wy + 1; cy <= wy + 3; cy++) putV(wxc + dx, cy, wzc + dz, B.AIR);
+        }
       }
     }
 
@@ -301,9 +330,11 @@ class World {
     };
 
     const aoBuf = [1, 1, 1, 1];
+    // inset UVs by half a texel so neighbouring atlas tiles never bleed in
+    const PAD = 1 / (ATLAS_TILES * TILE * 2), tsi = ts - 2 * PAD;
     const pushFace = (acc, face, x, y, z, tile, shade, opts = {}) => {
       const base = acc.pos.length / 3;
-      const tu = (tile % ATLAS_TILES) * ts, tv = 1 - (Math.floor(tile / ATLAS_TILES) + 1) * ts;
+      const tu = (tile % ATLAS_TILES) * ts + PAD, tv = 1 - (Math.floor(tile / ATLAS_TILES) + 1) * ts + PAD;
       const ao = opts.ao || null;
       const tr = opts.tr ?? 1, tg = opts.tg ?? 1, tb = opts.tb ?? 1;
       for (let i = 0; i < 4; i++) {
@@ -317,10 +348,11 @@ class World {
           else if (d[0] !== 0) acc.uv.push((z + c.pos[2]) * 0.25, (y + py) * 0.25);
           else acc.uv.push((x + c.pos[0]) * 0.25, (y + py) * 0.25);
         } else {
-          acc.uv.push(tu + c.uv[0] * ts, tv + c.uv[1] * ts);
+          acc.uv.push(tu + c.uv[0] * tsi, tv + c.uv[1] * tsi);
         }
         const a = ao ? ao[i] : 1;
         acc.col.push(shade * a * tr, shade * a * tg, shade * a * tb);
+        acc.sw.push(0);
       }
       // flip the quad diagonal through the darker corner pair to avoid AO seams
       if (ao && ao[0] + ao[3] < ao[1] + ao[2]) {
@@ -346,7 +378,7 @@ class World {
       if (def.cross) {
         // two crossed quads
         const acc = geo.alpha, tile = def.tex[0];
-        const tu = (tile % ATLAS_TILES) * ts, tv = 1 - (Math.floor(tile / ATLAS_TILES) + 1) * ts;
+        const tu = (tile % ATLAS_TILES) * ts + PAD, tv = 1 - (Math.floor(tile / ATLAS_TILES) + 1) * ts + PAD;
         const quads = [
           [[0.15, 0, 0.15], [0.85, 0, 0.85]],
           [[0.85, 0, 0.15], [0.15, 0, 0.85]],
@@ -355,8 +387,9 @@ class World {
           const base = acc.pos.length / 3;
           acc.pos.push(wx + a[0], ly, wz + a[2],  wx + b[0], ly, wz + b[2],
                        wx + a[0], ly + 1, wz + a[2],  wx + b[0], ly + 1, wz + b[2]);
-          acc.uv.push(tu, tv,  tu + ts, tv,  tu, tv + ts,  tu + ts, tv + ts);
+          acc.uv.push(tu, tv,  tu + tsi, tv,  tu, tv + tsi,  tu + tsi, tv + tsi);
           for (let i = 0; i < 4; i++) acc.col.push(0.9, 0.9, 0.9);
+          acc.sw.push(0, 0, 1, 1);           // top vertices wave in the wind
           acc.ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
         }
         continue;
@@ -400,6 +433,7 @@ class World {
       g.setAttribute('position', new THREE.Float32BufferAttribute(acc.pos, 3));
       g.setAttribute('uv', new THREE.Float32BufferAttribute(acc.uv, 2));
       g.setAttribute('color', new THREE.Float32BufferAttribute(acc.col, 3));
+      if (kind === 'alpha') g.setAttribute('sway', new THREE.Float32BufferAttribute(acc.sw, 1));
       g.setIndex(acc.ind);
       g.computeBoundingSphere();
       const m = new THREE.Mesh(g, this.mats[kind]);
@@ -413,7 +447,7 @@ class World {
     this.lightSources.set(this.key(cx, cz), srcs);
   }
 
-  _newGeoAcc() { return { pos: [], uv: [], col: [], ind: [] }; }
+  _newGeoAcc() { return { pos: [], uv: [], col: [], ind: [], sw: [] }; }
 
   removeMesh(cx, cz) {
     const k = this.key(cx, cz);
