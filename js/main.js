@@ -236,6 +236,17 @@ class Game {
     this.waterTex = fluidTex('water');
     this.lavaTex = fluidTex('lava');
 
+    // block light (torches/glowstone/lava): baked per vertex by the mesher,
+    // added as a warm emissive term so it glows independent of daylight
+    const injectBlockLight = shader => {
+      shader.vertexShader = 'attribute float blight;\nvarying float vBlight;\n' + shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        '#include <begin_vertex>\n vBlight = blight;');
+      shader.fragmentShader = 'varying float vBlight;\n' + shader.fragmentShader.replace(
+        '#include <emissivemap_fragment>',
+        '#include <emissivemap_fragment>\n totalEmissiveRadiance += diffuseColor.rgb * vBlight * vec3(1.15, 0.9, 0.58);');
+    };
+
     const alphaMat = new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, alphaTest: 0.5, side: THREE.DoubleSide });
     // plants wave in the wind: displace cross-quad top vertices (sway=1)
     alphaMat.onBeforeCompile = shader => {
@@ -245,12 +256,17 @@ class Game {
         `#include <begin_vertex>
          transformed.x += sway * sin(uTime * 1.7 + position.x * 0.9 + position.z * 0.7) * 0.075;
          transformed.z += sway * cos(uTime * 1.3 + position.x * 0.7 + position.z * 1.1) * 0.075;`);
+      injectBlockLight(shader);
       this._alphaShader = shader;
     };
+    const opaqueMat = new THREE.MeshLambertMaterial({ map: tex, vertexColors: true });
+    opaqueMat.onBeforeCompile = injectBlockLight;
+    const waterMat = new THREE.MeshLambertMaterial({ map: this.waterTex, vertexColors: true, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false });
+    waterMat.onBeforeCompile = injectBlockLight;
     const mats = {
-      opaque: new THREE.MeshLambertMaterial({ map: tex, vertexColors: true }),
+      opaque: opaqueMat,
       alpha: alphaMat,
-      water: new THREE.MeshLambertMaterial({ map: this.waterTex, vertexColors: true, transparent: true, opacity: 0.72, side: THREE.DoubleSide, depthWrite: false }),
+      water: waterMat,
       lava: new THREE.MeshBasicMaterial({ map: this.lavaTex, vertexColors: true, side: THREE.DoubleSide }),
     };
     this.world = new World(seed, this.scene, mats);

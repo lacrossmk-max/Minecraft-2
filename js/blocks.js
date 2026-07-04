@@ -6,6 +6,7 @@ const B = {
   PLANKS: 8, GLASS: 9, WATER: 10, BEDROCK: 11, SNOWGRASS: 12, COAL: 13,
   IRON: 14, GOLD: 15, DIAMOND: 16, BRICK: 17, CACTUS: 18, FLOWER: 19,
   GLOWSTONE: 20, CRAFT: 21, TNT: 22, LAVA: 23, GRAVEL: 24, TALLGRASS: 25,
+  TORCH: 26,
   // non-placeable items (food)
   APPLE: 100, PORKCHOP: 101
 };
@@ -37,6 +38,7 @@ const BLOCKS = {
   [B.LAVA]:      { name: 'Lava',             tex: [29, 29, 29], fluid: true, glow: true },
   [B.GRAVEL]:    { name: 'Kies',             tex: [30, 30, 30], hard: 0.7 },
   [B.TALLGRASS]: { name: 'Hohes Gras',       tex: [23, 23, 23], hard: 0.05, cross: true, drops: null },
+  [B.TORCH]:     { name: 'Fackel',           tex: [33, 33, 33], hard: 0.05, cross: true, glow: true, emit: 14 },
 };
 
 const ITEMS = {
@@ -54,12 +56,13 @@ function isFluid(id)   { const b = BLOCKS[id]; return !!b && !!b.fluid; }
 const CREATIVE_BLOCKS = [
   B.GRASS, B.DIRT, B.STONE, B.COBBLE, B.SAND, B.GRAVEL, B.LOG, B.LEAVES,
   B.PLANKS, B.GLASS, B.BRICK, B.SNOWGRASS, B.COAL, B.IRON, B.GOLD, B.DIAMOND,
-  B.GLOWSTONE, B.CRAFT, B.TNT, B.CACTUS, B.FLOWER, B.TALLGRASS, B.WATER, B.LAVA, B.BEDROCK
+  B.TORCH, B.GLOWSTONE, B.CRAFT, B.TNT, B.CACTUS, B.FLOWER, B.TALLGRASS, B.WATER, B.LAVA, B.BEDROCK
 ];
 
 // Simplified crafting recipes: { out, n, in: [[id, count], ...] }
 const RECIPES = [
   { out: B.PLANKS, n: 4, in: [[B.LOG, 1]] },
+  { out: B.TORCH,  n: 8, in: [[B.LOG, 1], [B.COAL, 1]] },
   { out: B.CRAFT,  n: 1, in: [[B.PLANKS, 4]] },
   { out: B.GLASS,  n: 2, in: [[B.SAND, 1], [B.COAL, 1]] },
   { out: B.BRICK,  n: 4, in: [[B.COBBLE, 4]] },
@@ -224,6 +227,14 @@ function buildAtlas(seed) {
     const dx = (x - 9) / 5, dy = (y - 7) / 6;
     if (dx * dx + dy * dy < 1) return [235, 150, 150, 255];
     if (y > 10 && y < 13 && x > 2 && x < 6) return [240, 230, 210, 255];
+    return [0, 0, 0, 0];
+  });
+
+  noisy(33, 0, 0, 0, 0, (x, y) => {                          // 33 torch (cross)
+    if ((x === 7 || x === 8) && y >= 6 && y <= 14) return [102, 76, 42, 255];  // stick
+    if ((x === 7 || x === 8) && (y === 4 || y === 5)) return [255, 226, 130, 255];
+    if ((x === 6 || x === 9) && (y === 4 || y === 5)) return [255, 176, 56, 255];
+    if (x >= 6 && x <= 9 && y === 3) return [255, 244, 190, 255];
     return [0, 0, 0, 0];
   });
 

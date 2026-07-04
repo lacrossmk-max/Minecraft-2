@@ -35,6 +35,34 @@ class World {
     this.everMeshed = new Set();    // chunks that were meshed at least once
     this.rising = [];               // freshly loaded chunks animating in
     this._villageCache = new Map();
+    this.emitters = new Map();      // chunk key -> [[wx,y,wz,level], ...] (light emitters)
+  }
+
+  // block-light emission level of a block id
+  static emitLevel(id, above) {
+    if (id === B.TORCH) return 14;
+    if (id === B.GLOWSTONE) return 15;
+    if (id === B.LAVA && above === B.AIR) return 10;   // only lava surfaces
+    return 0;
+  }
+
+  // cached list of light emitters in a chunk
+  getEmitters(cx, cz) {
+    const k = this.key(cx, cz);
+    let e = this.emitters.get(k);
+    if (e) return e;
+    const data = this.ensureChunk(cx, cz);
+    e = [];
+    const x0 = cx * CHUNK, z0 = cz * CHUNK;
+    for (let y = 0; y < HEIGHT; y++) for (let lz = 0; lz < CHUNK; lz++) for (let lx = 0; lx < CHUNK; lx++) {
+      const id = data[this.idx(lx, y, lz)];
+      if (id !== B.TORCH && id !== B.GLOWSTONE && id !== B.LAVA) continue;
+      const above = y + 1 < HEIGHT ? data[this.idx(lx, y + 1, lz)] : B.AIR;
+      const lvl = World.emitLevel(id, above);
+      if (lvl && e.length < 80) e.push([x0 + lx, y, z0 + lz, lvl]);
+    }
+    this.emitters.set(k, e);
+    return e;
   }
 
   key(cx, cz) { return cx + ',' + cz; }
@@ -291,8 +319,28 @@ class World {
     const cx = Math.floor(x / CHUNK), cz = Math.floor(z / CHUNK);
     const c = this.ensureChunk(cx, cz);
     const lx = x - cx * CHUNK, lz = z - cz * CHUNK;
+    const old = c[this.idx(lx, y, lz)];
     c[this.idx(lx, y, lz)] = id;
     if (recordEdit) this.edits.set(x + ',' + y + ',' + z, id);
+    this.emitters.delete(this.key(cx, cz));
+
+    // block light travels up to 14 blocks: when a light source changes, or any
+    // block changes while emitters are nearby, the whole 3x3 needs a remesh
+    const emits = i => i === B.TORCH || i === B.GLOWSTONE || i === B.LAVA;
+    let lightNearby = emits(old) || emits(id);
+    if (!lightNearby) {
+      outer: for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+        if (this.getEmitters(cx + dx, cz + dz).length) { lightNearby = true; break outer; }
+      }
+    }
+    if (lightNearby) {
+      for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+        if (this.meshes.has(this.key(cx + dx, cz + dz)) || (dx === 0 && dz === 0)) {
+          this.dirty.add(this.key(cx + dx, cz + dz));
+        }
+      }
+      return;
+    }
     this.dirty.add(this.key(cx, cz));
     if (lx === 0) this.dirty.add(this.key(cx - 1, cz));
     if (lx === CHUNK - 1) this.dirty.add(this.key(cx + 1, cz));
@@ -311,13 +359,57 @@ class World {
     const ts = 1 / ATLAS_TILES;
     const AO_LEVELS = [1.0, 0.8, 0.64, 0.5];
 
-    // per-vertex ambient occlusion: check the two side neighbours and the
-    // corner neighbour in the layer the face looks into
-    const cornerAO = (face, wx, ly, wz, out) => {
+    // ---- block light: flood-fill from torches/glowstone/lava into a padded
+    // volume (14 = max light range), then bake per-vertex light levels ----
+    const PADL = 14, LSX = CHUNK + 2 * PADL;
+    if (!this._lightBuf) {
+      this._lightBuf = new Uint8Array(LSX * LSX * HEIGHT);
+      this._lightQ = new Int32Array(LSX * LSX * HEIGHT);
+    }
+    const light = this._lightBuf;
+    light.fill(0);
+    const lx0 = x0 - PADL, lz0 = z0 - PADL;
+    const lidx = (lx, y, lz) => (lx * LSX + lz) * HEIGHT + y;
+    const Q = this._lightQ;
+    let qh = 0, qt = 0;
+    for (let dcx = -1; dcx <= 1; dcx++) for (let dcz = -1; dcz <= 1; dcz++) {
+      for (const [ex, ey, ez, lvl] of this.getEmitters(cx + dcx, cz + dcz)) {
+        const llx = ex - lx0, llz = ez - lz0;
+        if (llx < 0 || llx >= LSX || llz < 0 || llz >= LSX) continue;
+        const li = lidx(llx, ey, llz);
+        if (light[li] < lvl) { light[li] = lvl; Q[qt++] = li; }
+      }
+    }
+    while (qh < qt) {
+      const li = Q[qh++];
+      const lvl = light[li];
+      if (lvl <= 1) continue;
+      const y = li % HEIGHT, rest = (li - y) / HEIGHT;
+      const llz = rest % LSX, llx = (rest - llz) / LSX;
+      for (const [ddx, ddy, ddz] of [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]) {
+        const nx = llx + ddx, ny = y + ddy, nz = llz + ddz;
+        if (nx < 0 || nx >= LSX || nz < 0 || nz >= LSX || ny < 0 || ny >= HEIGHT) continue;
+        const ni = lidx(nx, ny, nz);
+        if (light[ni] >= lvl - 1) continue;
+        if (isOpaque(this.getBlock(lx0 + nx, ny, lz0 + nz))) continue;
+        light[ni] = lvl - 1;
+        Q[qt++] = ni;
+      }
+    }
+    const getLight = (wx, y, wz) => {
+      const llx = wx - lx0, llz = wz - lz0;
+      if (llx < 0 || llx >= LSX || llz < 0 || llz >= LSX || y < 0 || y >= HEIGHT) return 0;
+      return light[lidx(llx, y, llz)];
+    };
+
+    // per-vertex ambient occlusion + smooth block light: both sample the two
+    // side neighbours and the corner neighbour in the layer the face looks into
+    const cornerData = (face, wx, ly, wz, aoOut, blOut) => {
       const d = face.dir;
       const axisN = d[0] !== 0 ? 0 : (d[1] !== 0 ? 1 : 2);
       const a1 = (axisN + 1) % 3, a2 = (axisN + 2) % 3;
       const bx = wx + d[0], by = ly + d[1], bz = wz + d[2];
+      const baseL = getLight(bx, by, bz);
       for (let i = 0; i < 4; i++) {
         const c = face.corners[i];
         const cu = c.pos[a1] ? 1 : -1, cv = c.pos[a2] ? 1 : -1;
@@ -327,11 +419,15 @@ class World {
         const s1 = isOpaque(this.getBlock(p1[0], p1[1], p1[2])) ? 1 : 0;
         const s2 = isOpaque(this.getBlock(p2[0], p2[1], p2[2])) ? 1 : 0;
         const cc = isOpaque(this.getBlock(pc[0], pc[1], pc[2])) ? 1 : 0;
-        out[i] = AO_LEVELS[(s1 && s2) ? 3 : s1 + s2 + cc];
+        aoOut[i] = AO_LEVELS[(s1 && s2) ? 3 : s1 + s2 + cc];
+        // average light over the 4 cells touching this vertex = smooth lighting
+        const l = (baseL + getLight(p1[0], p1[1], p1[2]) + getLight(p2[0], p2[1], p2[2]) +
+                   getLight(pc[0], pc[1], pc[2])) / 4;
+        blOut[i] = Math.pow(l / 15, 1.3);
       }
     };
 
-    const aoBuf = [1, 1, 1, 1];
+    const aoBuf = [1, 1, 1, 1], blBuf = [0, 0, 0, 0];
     // inset UVs by half a texel so neighbouring atlas tiles never bleed in
     const PAD = 1 / (ATLAS_TILES * TILE * 2), tsi = ts - 2 * PAD;
     const pushFace = (acc, face, x, y, z, tile, shade, opts = {}) => {
@@ -356,6 +452,7 @@ class World {
         acc.col.push(shade * a * tr, shade * a * tg, shade * a * tb);
         acc.sw.push(0);
         acc.nor.push(face.dir[0], face.dir[1], face.dir[2]);
+        acc.bli.push(opts.bl ? opts.bl[i] : (opts.blFlat || 0));
       }
       // flip the quad diagonal through the darker corner pair to avoid AO seams
       if (ao && ao[0] + ao[3] < ao[1] + ao[2]) {
@@ -373,7 +470,7 @@ class World {
       const def = BLOCKS[id];
       const wx = x0 + lx, wz = z0 + lz;
       const glow = def.glow ? 1.45 : 1;
-      if (id === B.GLOWSTONE) srcs.push([wx + 0.5, ly + 0.5, wz + 0.5, 1]);
+      if (id === B.GLOWSTONE || id === B.TORCH) srcs.push([wx + 0.5, ly + 0.5, wz + 0.5, 1]);
       else if (id === B.LAVA && srcs.length < 12 && this.getBlock(wx, ly + 1, wz) === B.AIR) {
         srcs.push([wx + 0.5, ly + 1, wz + 0.5, 0]);
       }
@@ -391,7 +488,8 @@ class World {
           acc.pos.push(wx + a[0], ly, wz + a[2],  wx + b[0], ly, wz + b[2],
                        wx + a[0], ly + 1, wz + a[2],  wx + b[0], ly + 1, wz + b[2]);
           acc.uv.push(tu, tv,  tu + tsi, tv,  tu, tv + tsi,  tu + tsi, tv + tsi);
-          for (let i = 0; i < 4; i++) { acc.col.push(0.9, 0.9, 0.9); acc.nor.push(0, 1, 0); }
+          const ownL = Math.pow(getLight(wx, ly, wz) / 15, 1.3);
+          for (let i = 0; i < 4; i++) { acc.col.push(0.9, 0.9, 0.9); acc.nor.push(0, 1, 0); acc.bli.push(ownL); }
           acc.sw.push(0, 0, 1, 1);           // top vertices wave in the wind
           acc.ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
         }
@@ -418,8 +516,14 @@ class World {
                               : (def.transparent ? geo.alpha : geo.opaque);
         const opts = { fluid: def.fluid,
           tr: face.texIdx === 0 ? tr : 1, tg: face.texIdx === 0 ? tg : 1, tb: face.texIdx === 0 ? tb : 1 };
-        if (def.fluid) opts.hTop = this.getBlock(wx, ly + 1, wz) !== id ? 0.875 : 1;
-        if (!def.fluid && !def.glow) { cornerAO(face, wx, ly, wz, aoBuf); opts.ao = aoBuf; }
+        if (def.fluid) {
+          opts.hTop = this.getBlock(wx, ly + 1, wz) !== id ? 0.875 : 1;
+          opts.blFlat = Math.pow(getLight(nx, ny, nz) / 15, 1.3);
+        } else {
+          cornerData(face, wx, ly, wz, aoBuf, blBuf);
+          opts.bl = blBuf;
+          if (!def.glow) opts.ao = aoBuf;
+        }
         // leaves keep their tint on every face
         if (def.tex[0] === 9) { opts.tr = tr; opts.tg = tg; opts.tb = tb; }
         pushFace(acc, face, wx, ly, wz, tile, Math.min(1.6, face.shade * glow), opts);
@@ -438,6 +542,7 @@ class World {
       g.setAttribute('uv', new THREE.Float32BufferAttribute(acc.uv, 2));
       g.setAttribute('color', new THREE.Float32BufferAttribute(acc.col, 3));
       if (kind === 'alpha') g.setAttribute('sway', new THREE.Float32BufferAttribute(acc.sw, 1));
+      if (kind !== 'lava') g.setAttribute('blight', new THREE.Float32BufferAttribute(acc.bli, 1));
       g.setIndex(acc.ind);
       g.computeBoundingSphere();
       const m = new THREE.Mesh(g, this.mats[kind]);
@@ -451,7 +556,7 @@ class World {
     this.lightSources.set(this.key(cx, cz), srcs);
   }
 
-  _newGeoAcc() { return { pos: [], uv: [], col: [], ind: [], sw: [], nor: [] }; }
+  _newGeoAcc() { return { pos: [], uv: [], col: [], ind: [], sw: [], nor: [], bli: [] }; }
 
   removeMesh(cx, cz) {
     const k = this.key(cx, cz);
@@ -498,7 +603,10 @@ class World {
     // edits live in this.edits, so dropped chunks regenerate identically
     for (const k of this.chunks.keys()) {
       const [cx, cz] = k.split(',').map(Number);
-      if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > renderDist + 4) this.chunks.delete(k);
+      if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) > renderDist + 4) {
+        this.chunks.delete(k);
+        this.emitters.delete(k);
+      }
     }
     return done;
   }
