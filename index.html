@@ -104,6 +104,12 @@
     border-radius:4px; font-size:13px; }
   .recipe button:disabled { background:#555; color:#999; }
 
+  .chestgrid { display:grid; grid-template-columns:repeat(auto-fill,52px); gap:6px;
+    width:min(92vw,480px); max-height:28vh; overflow-y:auto; justify-content:center;
+    padding:8px; background:rgba(0,0,0,.4); border-radius:8px; margin-top:4px; }
+  .chestgrid .slot { width:52px; height:52px; cursor:pointer; }
+  .chestgrid .empty-note { padding:12px; color:#999; font-size:13px; grid-column:1/-1; text-align:center; }
+
   #death-screen { background:rgba(120,0,0,.7); display:none; }
   #loading { display:none; }
   #loadbar-outer { width:min(70vw,300px); height:14px; background:#222; border:2px solid #555;
@@ -200,6 +206,15 @@
   <h2 style="margin-top:14px;font-size:17px" id="craft-title">Handwerk</h2>
   <div id="craft-list"></div>
   <button class="mbtn green" id="btn-inv-close" style="margin-top:12px">Schließen</button>
+</div>
+
+<div class="overlay" id="chest-ui" style="display:none">
+  <h2>📦 Truhe</h2>
+  <div class="sub" style="margin-bottom:4px">Tippen zum Herausnehmen</div>
+  <div class="chestgrid" id="chest-grid"></div>
+  <div class="sub" style="margin:10px 0 4px">Dein Inventar — tippen zum Einlagern</div>
+  <div class="chestgrid" id="chest-inv-grid"></div>
+  <button class="mbtn green" id="btn-chest-close" style="margin-top:12px">Schließen</button>
 </div>
 
 <div class="overlay" id="death-screen">

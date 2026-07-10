@@ -341,7 +341,7 @@ class Controls {
       g._raycaster.setFromCamera(new THREE.Vector2(0, 0), g.camera);
       const mob = g.mobs.raycastMob(g._raycaster);
       if (mob) {
-        if (this.attackCd <= 0) { mob.hurt(5, g.player.pos); this.attackCd = 0.45; g.swingHand(true); }
+        if (this.attackCd <= 0) { mob.hurt(g.heldDamage(), g.player.pos); this.attackCd = 0.45; g.swingHand(true); }
         this.breakTarget = null;
       } else {
         const hit = g.raycastScreen(cx, cy);
@@ -351,8 +351,7 @@ class Controls {
         } else {
           const key = hit.x + ',' + hit.y + ',' + hit.z;
           if (!this.breakTarget || this.breakTarget.key !== key) {
-            this.breakTarget = { key, hit, progress: 0,
-              need: g.mode === 'creative' ? 0.22 : Math.max(0.15, def.hard) };
+            this.breakTarget = { key, hit, progress: 0, need: g.miningTime(hit.id) };
           }
           const bt = this.breakTarget;
           bt.hit = hit;

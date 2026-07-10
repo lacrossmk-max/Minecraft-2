@@ -6,9 +6,11 @@ const B = {
   PLANKS: 8, GLASS: 9, WATER: 10, BEDROCK: 11, SNOWGRASS: 12, COAL: 13,
   IRON: 14, GOLD: 15, DIAMOND: 16, BRICK: 17, CACTUS: 18, FLOWER: 19,
   GLOWSTONE: 20, CRAFT: 21, TNT: 22, LAVA: 23, GRAVEL: 24, TALLGRASS: 25,
-  TORCH: 26,
-  // non-placeable items (food)
-  APPLE: 100, PORKCHOP: 101
+  TORCH: 26, CHEST: 27,
+  // non-placeable items (food + tools)
+  APPLE: 100, PORKCHOP: 101,
+  PICK_WOOD: 102, PICK_STONE: 103, PICK_IRON: 104, PICK_DIA: 105,
+  SWORD_WOOD: 106, SWORD_STONE: 107, SWORD_IRON: 108, SWORD_DIA: 109
 };
 
 // tex: [top, bottom, side] atlas tile indices
@@ -39,12 +41,25 @@ const BLOCKS = {
   [B.GRAVEL]:    { name: 'Kies',             tex: [30, 30, 30], hard: 0.7 },
   [B.TALLGRASS]: { name: 'Hohes Gras',       tex: [23, 23, 23], hard: 0.05, cross: true, drops: null },
   [B.TORCH]:     { name: 'Fackel',           tex: [33, 33, 33], hard: 0.05, cross: true, glow: true, emit: 14 },
+  [B.CHEST]:     { name: 'Truhe',            tex: [46, 46, 47], hard: 1.2 },
 };
 
 const ITEMS = {
-  [B.APPLE]:    { name: 'Apfel',    tile: 31, food: 4 },
-  [B.PORKCHOP]: { name: 'Kotelett', tile: 32, food: 8 },
+  [B.APPLE]:       { name: 'Apfel',    tile: 31, food: 4 },
+  [B.PORKCHOP]:    { name: 'Kotelett', tile: 32, food: 8 },
+  [B.PICK_WOOD]:   { name: 'Holzspitzhacke',    tile: 34, tool: 'pick', tier: 1, speed: 2,  dmg: 3 },
+  [B.PICK_STONE]:  { name: 'Steinspitzhacke',   tile: 35, tool: 'pick', tier: 2, speed: 4,  dmg: 4 },
+  [B.PICK_IRON]:   { name: 'Eisenspitzhacke',   tile: 36, tool: 'pick', tier: 3, speed: 6,  dmg: 4 },
+  [B.PICK_DIA]:    { name: 'Diamantspitzhacke', tile: 37, tool: 'pick', tier: 4, speed: 9,  dmg: 5 },
+  [B.SWORD_WOOD]:  { name: 'Holzschwert',       tile: 38, tool: 'sword', tier: 1, dmg: 5 },
+  [B.SWORD_STONE]: { name: 'Steinschwert',      tile: 39, tool: 'sword', tier: 2, dmg: 6 },
+  [B.SWORD_IRON]:  { name: 'Eisenschwert',      tile: 44, tool: 'sword', tier: 3, dmg: 8 },
+  [B.SWORD_DIA]:   { name: 'Diamantschwert',    tile: 45, tool: 'sword', tier: 4, dmg: 10 },
 };
+
+// blocks that mine faster with a pickaxe; ores additionally REQUIRE a tier
+const PICK_BLOCKS = new Set([B.STONE, B.COBBLE, B.COAL, B.IRON, B.GOLD, B.DIAMOND, B.BRICK, B.GLOWSTONE]);
+const ORE_TIER = { [B.COAL]: 1, [B.IRON]: 2, [B.GOLD]: 3, [B.DIAMOND]: 3 };
 
 function itemName(id)  { return BLOCKS[id] ? BLOCKS[id].name : (ITEMS[id] ? ITEMS[id].name : '?'); }
 function itemTile(id)  { return BLOCKS[id] ? BLOCKS[id].tex[2] : (ITEMS[id] ? ITEMS[id].tile : 0); }
@@ -56,7 +71,7 @@ function isFluid(id)   { const b = BLOCKS[id]; return !!b && !!b.fluid; }
 const CREATIVE_BLOCKS = [
   B.GRASS, B.DIRT, B.STONE, B.COBBLE, B.SAND, B.GRAVEL, B.LOG, B.LEAVES,
   B.PLANKS, B.GLASS, B.BRICK, B.SNOWGRASS, B.COAL, B.IRON, B.GOLD, B.DIAMOND,
-  B.TORCH, B.GLOWSTONE, B.CRAFT, B.TNT, B.CACTUS, B.FLOWER, B.TALLGRASS, B.WATER, B.LAVA, B.BEDROCK
+  B.TORCH, B.GLOWSTONE, B.CRAFT, B.CHEST, B.TNT, B.CACTUS, B.FLOWER, B.TALLGRASS, B.WATER, B.LAVA, B.BEDROCK
 ];
 
 // Simplified crafting recipes: { out, n, in: [[id, count], ...] }
@@ -68,6 +83,15 @@ const RECIPES = [
   { out: B.BRICK,  n: 4, in: [[B.COBBLE, 4]] },
   { out: B.GLOWSTONE, n: 1, in: [[B.GOLD, 2], [B.COAL, 1]] },
   { out: B.TNT,    n: 1, in: [[B.SAND, 4], [B.COAL, 1]] },
+  { out: B.CHEST,  n: 1, in: [[B.PLANKS, 8]] },
+  { out: B.PICK_WOOD,   n: 1, in: [[B.PLANKS, 3], [B.LOG, 1]] },
+  { out: B.PICK_STONE,  n: 1, in: [[B.COBBLE, 3], [B.LOG, 1]] },
+  { out: B.PICK_IRON,   n: 1, in: [[B.IRON, 3], [B.LOG, 1]] },
+  { out: B.PICK_DIA,    n: 1, in: [[B.DIAMOND, 3], [B.LOG, 1]] },
+  { out: B.SWORD_WOOD,  n: 1, in: [[B.PLANKS, 2], [B.LOG, 1]] },
+  { out: B.SWORD_STONE, n: 1, in: [[B.COBBLE, 2], [B.LOG, 1]] },
+  { out: B.SWORD_IRON,  n: 1, in: [[B.IRON, 2], [B.LOG, 1]] },
+  { out: B.SWORD_DIA,   n: 1, in: [[B.DIAMOND, 2], [B.LOG, 1]] },
 ];
 
 // ---------------- Texture atlas (8x8 tiles, 16px each) ----------------
@@ -236,6 +260,39 @@ function buildAtlas(seed) {
     if ((x === 6 || x === 9) && (y === 4 || y === 5)) return [255, 176, 56, 255];
     if (x >= 6 && x <= 9 && y === 3) return [255, 244, 190, 255];
     return [0, 0, 0, 0];
+  });
+
+  // tool icons: pickaxes (34-37) and swords (38,39,44,45) in four materials
+  const toolCols = { wood: [158, 120, 70], stone: [130, 130, 130], iron: [226, 226, 232], dia: [95, 228, 235] };
+  const pickIcon = (i, col) => noisy(i, 0, 0, 0, 0, (x, y) => {
+    if (x + y === 17 && x >= 4 && x <= 12) return [116, 84, 48, 255];      // handle
+    if (x + y === 18 && x >= 5 && x <= 12) return [92, 66, 38, 255];
+    if (y === 3 && x >= 3 && x <= 12) return [col[0], col[1], col[2], 255]; // head
+    if (y === 4 && (x === 2 || x === 3 || x === 12 || x === 13)) return [col[0], col[1], col[2], 255];
+    if ((y === 5 || y === 6 || y === 7) && (x === 1 || x === 14)) return [col[0], col[1], col[2], 255];
+    return [0, 0, 0, 0];
+  });
+  const swordIcon = (i, col) => noisy(i, 0, 0, 0, 0, (x, y) => {
+    if ((x === 8 || x === 9) && y >= 1 && y <= 9) return [col[0], col[1], col[2], 255];  // blade
+    if (x === 7 && y >= 2 && y <= 9) return [col[0] * 0.75 | 0, col[1] * 0.75 | 0, col[2] * 0.75 | 0, 255];
+    if (y === 10 && x >= 5 && x <= 11) return [116, 84, 48, 255];          // guard
+    if ((x === 8 || x === 9) && y >= 11 && y <= 14) return [92, 66, 38, 255]; // grip
+    return [0, 0, 0, 0];
+  });
+  pickIcon(34, toolCols.wood); pickIcon(35, toolCols.stone);
+  pickIcon(36, toolCols.iron); pickIcon(37, toolCols.dia);
+  swordIcon(38, toolCols.wood); swordIcon(39, toolCols.stone);
+  swordIcon(44, toolCols.iron); swordIcon(45, toolCols.dia);
+
+  noisy(46, 150, 112, 64, 10, (x, y, c) => {                 // 46 chest top/bottom
+    if (x === 0 || y === 0 || x === 15 || y === 15) return [96, 70, 40, 255];
+    return c;
+  });
+  noisy(47, 150, 112, 64, 10, (x, y, c) => {                 // 47 chest side with latch
+    if (x === 0 || y === 0 || x === 15 || y === 15) return [96, 70, 40, 255];
+    if (y === 6) return [104, 78, 46, 255];                  // lid seam
+    if (x >= 7 && x <= 8 && y >= 5 && y <= 8) return [204, 184, 96, 255]; // latch
+    return c;
   });
 
   // 40..43: crack overlay stages (random cracks radiating from the centre)

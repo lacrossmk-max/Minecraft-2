@@ -106,6 +106,7 @@ class Game {
     this.weather = { type: 'clear', t: 90 + Math.random() * 90 };
     this.daylight = 1;
     this.inventory = new Map();         // survival: item id -> count
+    this.chests = new Map();            // "x,y,z" -> Map(item id -> count)
     this.tnt = [];                      // active {x,y,z,t,mesh}
     this.mode = 'survival';
     this.ui = new UI(this);
@@ -283,6 +284,9 @@ class Game {
       this.timeOfDay = save.time ?? 0.3;
       for (const [k, v] of Object.entries(save.edits || {})) this.world.edits.set(k, v);
       for (const [k, v] of Object.entries(save.inv || {})) this.inventory.set(+k, v);
+      for (const [k, obj] of Object.entries(save.chests || {})) {
+        this.chests.set(k, new Map(Object.entries(obj).map(([i, c]) => [+i, c])));
+      }
       if (save.hotbar) this.ui.hotbar = save.hotbar;
       if (save.pos) this.player.pos.set(save.pos[0], save.pos[1], save.pos[2]);
       if (save.look) { this.player.yaw = save.look[0]; this.player.pitch = save.look[1]; }
@@ -957,7 +961,7 @@ class Game {
 
     // 1) mob in reach? -> attack
     const mob = this.mobs.raycastMob(this._raycaster);
-    if (mob) { mob.hurt(5, this.player.pos); return; }
+    if (mob) { mob.hurt(this.heldDamage(), this.player.pos); return; }
 
     const item = this.ui.currentItem();
 
@@ -979,6 +983,7 @@ class Game {
     // 3) special blocks
     if (hit.id === B.TNT) { this.igniteTnt(hit.x, hit.y, hit.z); return; }
     if (hit.id === B.CRAFT) { this.ui.toggleInventory(); return; }
+    if (hit.id === B.CHEST) { this.ui.openChest(hit.x + ',' + hit.y + ',' + hit.z); return; }
 
     // 4) place block
     if (!BLOCKS[item]) return;
@@ -997,6 +1002,44 @@ class Game {
     this.ui.refreshHotbar();
   }
 
+  // ---------------- tools ----------------
+  // currently held tool (survival requires actually owning it)
+  heldTool() {
+    const id = this.ui.currentItem();
+    const it = ITEMS[id];
+    if (!it || !it.tool) return null;
+    if (this.mode === 'survival' && (this.inventory.get(id) || 0) <= 0) return null;
+    return it;
+  }
+
+  // seconds to mine a block, considering the held pickaxe
+  miningTime(blockId) {
+    if (this.mode === 'creative') return 0.22;
+    const def = BLOCKS[blockId];
+    let t = Math.max(0.15, def.hard);
+    if (PICK_BLOCKS.has(blockId)) {
+      const tool = this.heldTool();
+      const pick = tool && tool.tool === 'pick' ? tool : null;
+      const reqd = ORE_TIER[blockId] || 0;
+      if (pick && pick.tier >= reqd) t /= pick.speed;
+      else t *= 2.2;                      // wrong/no tool: slow going
+    }
+    return t;
+  }
+
+  // would the block actually drop with the current tool?
+  canHarvest(blockId) {
+    const reqd = ORE_TIER[blockId] || 0;
+    if (!reqd) return true;
+    const tool = this.heldTool();
+    return !!(tool && tool.tool === 'pick' && tool.tier >= reqd);
+  }
+
+  heldDamage() {
+    const tool = this.heldTool();
+    return tool ? tool.dmg : 3;
+  }
+
   breakBlock(hit) {
     const def = BLOCKS[hit.id];
     if (!def) return;
@@ -1007,9 +1050,24 @@ class Game {
     const cols = { [B.GRASS]: 0x6aa040, [B.SAND]: 0xdbcfa3, [B.STONE]: 0x7f7f7f, [B.LOG]: 0x675231, [B.LEAVES]: 0x3a8428 };
     this.particles.burst(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, cols[hit.id] ?? 0x9a8866, 8);
 
+    // a chest returns its stored items
+    if (hit.id === B.CHEST) {
+      const ck = hit.x + ',' + hit.y + ',' + hit.z;
+      const stored = this.chests.get(ck);
+      if (stored && this.mode === 'survival') {
+        for (const [id, n] of stored) if (n > 0) this.addItem(id, n);
+        if (stored.size) this.toast('Truheninhalt eingesammelt');
+      }
+      this.chests.delete(ck);
+    }
+
     if (this.mode === 'survival') {
       let drop = 'drops' in def ? def.drops : hit.id;
       if (drop === 'leaves') drop = Math.random() < 0.08 ? B.APPLE : null;
+      if (drop != null && !this.canHarvest(hit.id)) {
+        drop = null;
+        this.toast('Dafür brauchst du eine bessere Spitzhacke!');
+      }
       if (drop != null) {
         this.addItem(drop, 1);
         this.sound.play('pickup');
@@ -1064,6 +1122,7 @@ class Game {
           const id = this.world.getBlock(x, y, z);
           if (id === B.AIR || id === B.BEDROCK || isFluid(id)) continue;
           if (id === B.TNT) { this.igniteTnt(x, y, z); continue; }
+          if (id === B.CHEST) this.chests.delete(x + ',' + y + ',' + z);
           this.world.setBlock(x, y, z, B.AIR);
         }
     // player damage
@@ -1111,6 +1170,7 @@ class Game {
         seed: this.seed, mode: this.mode, time: this.timeOfDay,
         edits: Object.fromEntries(this.world.edits),
         inv: Object.fromEntries(this.inventory),
+        chests: Object.fromEntries([...this.chests].map(([k, m]) => [k, Object.fromEntries(m)])),
         hotbar: this.ui.hotbar,
         pos: [this.player.pos.x, this.player.pos.y, this.player.pos.z],
         look: [this.player.yaw, this.player.pitch],

@@ -140,6 +140,60 @@ class UI {
     }
   }
 
+  // ---------------- chest ----------------
+  openChest(key) {
+    const g = this.game;
+    this.chestKey = key;
+    if (!g.chests.has(key)) g.chests.set(key, new Map());
+    document.getElementById('chest-ui').style.display = 'flex';
+    g.paused = true;
+    this.refreshChest();
+  }
+
+  closeChest() {
+    document.getElementById('chest-ui').style.display = 'none';
+    this.chestKey = null;
+    this.game.paused = false;
+    this.refreshHotbar();
+  }
+
+  refreshChest() {
+    const g = this.game;
+    const chest = g.chests.get(this.chestKey);
+    if (!chest) return;
+
+    const fillGrid = (el, entries, emptyText, onTap) => {
+      el.innerHTML = '';
+      let any = false;
+      for (const [id, n] of entries) {
+        if (n <= 0) continue;
+        any = true;
+        const s = document.createElement('div');
+        s.className = 'slot';
+        s.innerHTML = `<div class="icon" style="background-image:url(${this.atlasUrl});background-position:${tileCss(id)}"></div><div class="cnt">${n}</div>`;
+        s.title = itemName(id);
+        s.addEventListener('pointerdown', () => onTap(id, n));
+        el.appendChild(s);
+      }
+      if (!any) el.innerHTML = `<div class="empty-note">${emptyText}</div>`;
+    };
+
+    // chest side: tap -> take the whole stack
+    fillGrid(document.getElementById('chest-grid'), chest, 'Diese Truhe ist leer.', (id, n) => {
+      chest.set(id, 0);
+      g.addItem(id, n);
+      g.sound.play('pickup');
+      this.refreshChest();
+    });
+    // inventory side: tap -> store the whole stack
+    fillGrid(document.getElementById('chest-inv-grid'), g.inventory, 'Dein Inventar ist leer.', (id, n) => {
+      g.inventory.set(id, 0);
+      chest.set(id, (chest.get(id) || 0) + n);
+      g.sound.play('place');
+      this.refreshChest();
+    });
+  }
+
   // ---------------- pause / menus ----------------
   togglePause() {
     const el = document.getElementById('pause-menu');
@@ -155,6 +209,7 @@ class UI {
     const $ = id => document.getElementById(id);
 
     $('btn-inv-close').addEventListener('pointerdown', () => this.toggleInventory());
+    $('btn-chest-close').addEventListener('pointerdown', () => this.closeChest());
     $('btn-resume').addEventListener('pointerdown', () => this.togglePause());
     $('btn-save').addEventListener('pointerdown', () => { g.save(); g.toast('Welt gespeichert ✓'); });
     $('btn-quit').addEventListener('pointerdown', () => { g.save(); location.reload(); });
