@@ -2,8 +2,11 @@
 'use strict';
 
 const MOB_DEFS = {
-  pig:      { w: 0.8, h: 0.9, speed: 1.4, health: 10, color: 0xeda3a8, max: 6 },
-  zombie:   { w: 0.6, h: 1.8, speed: 2.4, health: 20, color: 0x4a7a3a, max: 8 },
+  pig:      { w: 0.8, h: 0.9, speed: 1.4, health: 10, color: 0xeda3a8, max: 4 },
+  cow:      { w: 0.9, h: 1.4, speed: 1.2, health: 12, color: 0x6b4a2f, max: 3 },
+  sheep:    { w: 0.9, h: 1.3, speed: 1.1, health: 10, color: 0xe8e6e0, max: 3 },
+  zombie:   { w: 0.6, h: 1.8, speed: 2.4, health: 20, color: 0x4a7a3a, max: 6 },
+  skeleton: { w: 0.5, h: 1.9, speed: 2.0, health: 16, color: 0xd8d8d0, max: 4 },
   villager: { w: 0.6, h: 1.9, speed: 1.1, health: 20, color: 0x8a6c46, max: 4 },
 };
 
@@ -52,6 +55,39 @@ class Mob {
         this.limbs.push(limb(0.18, 0.35, 0.18, x, 0.35, z, dark));
         this.limbPhase.push(i === 0 || i === 3 ? 0 : Math.PI);   // diagonal gait
       });
+    } else if (this.type === 'cow') {
+      const white = new THREE.MeshLambertMaterial({ color: 0xf3efe6 });
+      box(0.85, 0.7, 1.3, 0, 0.9, 0);                 // body
+      box(0.6, 0.25, 0.5, 0, 0.62, 0.35, white);      // belly patch
+      box(0.5, 0.5, 0.5, 0, 1.1, -0.85);              // head
+      box(0.32, 0.2, 0.12, 0, 0.96, -1.14, white);    // snout
+      box(0.1, 0.12, 0.1, -0.28, 1.38, -0.8, white);  // horns
+      box(0.1, 0.12, 0.1, 0.28, 1.38, -0.8, white);
+      const legPos = [[-0.26, -0.42], [0.26, -0.42], [-0.26, 0.42], [0.26, 0.42]];
+      legPos.forEach(([x, z], i) => {
+        this.limbs.push(limb(0.2, 0.55, 0.2, x, 0.55, z, dark));
+        this.limbPhase.push(i === 0 || i === 3 ? 0 : Math.PI);
+      });
+    } else if (this.type === 'sheep') {
+      const face = new THREE.MeshLambertMaterial({ color: 0xb5aa9c });
+      box(0.9, 0.8, 1.2, 0, 0.95, 0);                 // wool body
+      box(0.42, 0.42, 0.5, 0, 1.25, -0.75, face);     // head
+      box(0.46, 0.3, 0.24, 0, 1.3, -0.6);             // wool cap
+      const legPos = [[-0.22, -0.35], [0.22, -0.35], [-0.22, 0.35], [0.22, 0.35]];
+      legPos.forEach(([x, z], i) => {
+        this.limbs.push(limb(0.18, 0.55, 0.18, x, 0.55, z, face));
+        this.limbPhase.push(i === 0 || i === 3 ? 0 : Math.PI);
+      });
+    } else if (this.type === 'skeleton') {
+      const bow = new THREE.MeshLambertMaterial({ color: 0x7a5a34 });
+      box(0.4, 0.65, 0.2, 0, 1.2, 0);                 // ribcage
+      box(0.42, 0.42, 0.42, 0, 1.75, 0, dark);        // skull
+      box(0.12, 0.12, 0.55, -0.24, 1.42, -0.3);       // aiming arm
+      box(0.12, 0.5, 0.12, 0.24, 1.2, 0);             // hanging arm
+      box(0.07, 0.6, 0.07, -0.24, 1.42, -0.6, bow);   // bow
+      this.limbs.push(limb(0.14, 0.8, 0.14, -0.12, 0.85, 0));
+      this.limbs.push(limb(0.14, 0.8, 0.14, 0.12, 0.85, 0));
+      this.limbPhase.push(0, Math.PI);
     } else if (this.type === 'villager') {
       const skin = new THREE.MeshLambertMaterial({ color: 0xd6a77a });
       box(0.52, 0.8, 0.34, 0, 1.1, 0);                // brown robe torso
@@ -106,6 +142,16 @@ class Mob {
         const kb = new THREE.Vector3(p.pos.x - this.pos.x, 0, p.pos.z - this.pos.z).normalize();
         p.vel.y = 4; p.pos.x += kb.x * 0.3; p.pos.z += kb.z * 0.3;
       }
+    } else if (this.type === 'skeleton' && distToPlayer < 24 && !p.dead) {
+      // ranged: keep a comfortable distance and shoot arrows
+      this.yaw = Math.atan2(p.pos.x - this.pos.x, p.pos.z - this.pos.z);
+      if (distToPlayer > 13) wantMove = true;
+      else if (distToPlayer < 6) { this.yaw += Math.PI; wantMove = true; }   // back off
+      this.shootT = (this.shootT ?? 1.5) - dt;
+      if (this.shootT <= 0 && distToPlayer <= 18 && this.hurtT <= 0) {
+        this.shootT = 2.4;
+        g.shootArrow(this.pos.x, this.pos.y + 1.45, this.pos.z);
+      }
     } else {
       this.wanderT -= dt;
       if (this.wanderT <= 0) {
@@ -147,8 +193,8 @@ class Mob {
     }
     if (this.pos.y < -20) this.health = 0;
 
-    // zombies burn in daylight
-    if (this.type === 'zombie' && this.game.daylight > 0.6) {
+    // the undead burn in daylight
+    if ((this.type === 'zombie' || this.type === 'skeleton') && this.game.daylight > 0.6) {
       this._burnT = (this._burnT || 0) + dt;
       if (this._burnT > 1) { this._burnT = 0; this.hurt(4, null); }
     }
@@ -214,9 +260,13 @@ class MobManager {
         if (m.health <= 0 && !far) {
           g.particles.burst(m.pos.x, m.pos.y + 0.5, m.pos.z, m.def.color, 12);
           g.sound.play('die');
-          if (m.type === 'pig' && g.mode === 'survival') {
-            g.addItem(B.PORKCHOP, 1);
-            g.toast('+1 Kotelett');
+          if (g.mode === 'survival') {
+            if (m.type === 'pig') { g.addItem(B.PORKCHOP, 1); g.toast('+1 Kotelett'); }
+            else if (m.type === 'cow') { g.addItem(B.LEATHER, 1); g.addItem(B.BEEF, 1); g.toast('+1 Leder, +1 Rindfleisch'); }
+            else if (m.type === 'sheep') {
+              const n = 1 + (Math.random() < 0.5 ? 1 : 0);
+              g.addItem(B.WOOL, n); g.toast('+' + n + ' Wolle');
+            }
           }
         }
         m.dispose();
@@ -240,7 +290,9 @@ class MobManager {
       }
     }
     const night = g.daylight < 0.25;
-    const type = night ? 'zombie' : 'pig';
+    let type;
+    if (night) type = Math.random() < 0.6 ? 'zombie' : 'skeleton';
+    else { const r = Math.random(); type = r < 0.5 ? 'pig' : (r < 0.75 ? 'cow' : 'sheep'); }
     if (this.count(type) >= MOB_DEFS[type].max) return;
     const ang = Math.random() * Math.PI * 2;
     const dist = 24 + Math.random() * 16;
@@ -249,7 +301,7 @@ class MobManager {
     const y = g.world.surfaceHeight(x, z) + 1;
     if (y <= WATER_Y + 1) return;
     const ground = g.world.getBlock(x, y - 1, z);
-    if (type === 'pig' && ground !== B.GRASS) return;
+    if (!night && ground !== B.GRASS) return;      // animals graze on grass
     if (!isSolid(ground)) return;
     this.mobs.push(new Mob(g, type, x + 0.5, y, z + 0.5));
   }

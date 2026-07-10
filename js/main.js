@@ -23,6 +23,8 @@ class Sound {
         hurtmob: { f: 220, f2: 120, d: 0.15, type: 'square', g: 0.1 },
         die:     { f: 200, f2: 40, d: 0.5, type: 'sawtooth', g: 0.15 },
         eat:     { f: 140, f2: 200, d: 0.12, type: 'square', g: 0.1 },
+        bow:     { f: 620, f2: 180, d: 0.16, type: 'sawtooth', g: 0.07 },
+        sleep:   { f: 300, f2: 520, d: 0.5, type: 'sine', g: 0.09 },
         craft:   { f: 420, f2: 560, d: 0.12, type: 'triangle', g: 0.12 },
         splash:  { f: 500, f2: 100, d: 0.3, type: 'sine', g: 0.08 },
         fuse:    { f: 900, f2: 900, d: 0.25, type: 'sawtooth', g: 0.06 },
@@ -108,6 +110,7 @@ class Game {
     this.inventory = new Map();         // survival: item id -> count
     this.chests = new Map();            // "x,y,z" -> Map(item id -> count)
     this.tnt = [];                      // active {x,y,z,t,mesh}
+    this.arrows = [];                   // skeleton arrows in flight
     this.mode = 'survival';
     this.ui = new UI(this);
     this.controls = new Controls(this);
@@ -292,6 +295,7 @@ class Game {
       if (save.look) { this.player.yaw = save.look[0]; this.player.pitch = save.look[1]; }
       if (save.hp != null) this.player.health = save.hp;
       if (save.hunger != null) this.player.hunger = save.hunger;
+      if (save.spawn) this.spawnPoint = save.spawn;
     } else {
       // find a dry spawn
       let sx = 0, sz = 0;
@@ -822,6 +826,7 @@ class Game {
     this.mobs.update(dt);
     this.particles.update(dt);
     this.updateTnt(dt);
+    this.updateArrows(dt);
     this.updateWeather(dt);
     this.updateDayNight(dt);
     this.updateBlockLights(dt);
@@ -964,11 +969,16 @@ class Game {
     if (mob) { mob.hurt(this.heldDamage(), this.player.pos); return; }
 
     const item = this.ui.currentItem();
+    const hit = this.raycastScreen(sx, sy);
 
-    // 2) food? -> eat
-    if (ITEMS[item] && ITEMS[item].food) {
-      if (this.mode !== 'survival') return;
-      if ((this.inventory.get(item) || 0) <= 0) return;
+    // 2) interactive blocks always take priority (like right-click in the classics)
+    if (hit && hit.id === B.TNT) { this.igniteTnt(hit.x, hit.y, hit.z); return; }
+    if (hit && hit.id === B.CRAFT) { this.ui.toggleInventory(); return; }
+    if (hit && hit.id === B.CHEST) { this.ui.openChest(hit.x + ',' + hit.y + ',' + hit.z); return; }
+
+    // 3) food? -> eat (also works when tapping the sky)
+    if (ITEMS[item] && ITEMS[item].food && this.mode === 'survival' &&
+        (this.inventory.get(item) || 0) > 0) {
       if (this.player.hunger >= 19.5) { this.toast('Nicht hungrig'); return; }
       this.inventory.set(item, this.inventory.get(item) - 1);
       this.player.hunger = Math.min(20, this.player.hunger + ITEMS[item].food);
@@ -977,13 +987,22 @@ class Game {
       return;
     }
 
-    const hit = this.raycastScreen(sx, sy);
     if (!hit) return;
-
-    // 3) special blocks
-    if (hit.id === B.TNT) { this.igniteTnt(hit.x, hit.y, hit.z); return; }
-    if (hit.id === B.CRAFT) { this.ui.toggleInventory(); return; }
-    if (hit.id === B.CHEST) { this.ui.openChest(hit.x + ',' + hit.y + ',' + hit.z); return; }
+    if (hit.id === B.BED) {
+      this.spawnPoint = [hit.x + 0.5, hit.y + 1.5, hit.z + 0.5];
+      if (this.daylight < 0.35) {
+        // sleep through the night: jump to just after dawn, clear the undead
+        this.timeOfDay = 0.02;
+        for (const m of this.mobs.mobs) {
+          if (m.type === 'zombie' || m.type === 'skeleton') m.health = 0;
+        }
+        this.sound.play('sleep');
+        this.toast('Gut geschlafen! ☀ Spawnpunkt gesetzt', 2500);
+      } else {
+        this.toast('Spawnpunkt gesetzt', 1800);
+      }
+      return;
+    }
 
     // 4) place block
     if (!BLOCKS[item]) return;
@@ -1086,6 +1105,57 @@ class Game {
     this.ui.refreshHotbar();
   }
 
+  // ---------------- skeleton arrows ----------------
+  shootArrow(x, y, z) {
+    if (!this._arrowGeo) {
+      this._arrowGeo = new THREE.BoxGeometry(0.06, 0.06, 0.55);
+      this._arrowMat = new THREE.MeshLambertMaterial({ color: 0xcbb492 });
+    }
+    const p = this.player;
+    // aim with ballistic compensation: raise the aim by the gravity drop
+    // the arrow will accumulate over its flight time
+    const dist = Math.hypot(p.pos.x - x, p.pos.z - z);
+    const flight = dist / 17;
+    const drop = 0.5 * 9 * flight * flight;
+    const dir = new THREE.Vector3(p.pos.x - x, p.pos.y + 1.1 + drop - y, p.pos.z - z).normalize();
+    const mesh = new THREE.Mesh(this._arrowGeo, this._arrowMat);
+    mesh.position.set(x, y, z);
+    this.scene.add(mesh);
+    this.arrows.push({ pos: new THREE.Vector3(x, y, z), vel: dir.multiplyScalar(17), mesh, life: 4 });
+    this.sound.play('bow');
+  }
+
+  updateArrows(dt) {
+    const p = this.player;
+    for (let i = this.arrows.length - 1; i >= 0; i--) {
+      const a = this.arrows[i];
+      a.life -= dt;
+      a.vel.y -= 9 * dt;
+      // substep so fast arrows can't tunnel through blocks or the player
+      const steps = Math.max(1, Math.ceil(a.vel.length() * dt / 0.35));
+      let dead = a.life <= 0;
+      for (let s = 0; s < steps && !dead; s++) {
+        a.pos.addScaledVector(a.vel, dt / steps);
+        if (isSolid(this.world.getBlock(Math.floor(a.pos.x), Math.floor(a.pos.y), Math.floor(a.pos.z)))) {
+          dead = true; break;
+        }
+        if (!p.dead &&
+            Math.abs(a.pos.x - p.pos.x) < 0.45 && Math.abs(a.pos.z - p.pos.z) < 0.45 &&
+            a.pos.y > p.pos.y && a.pos.y < p.pos.y + 1.8) {
+          this.damagePlayer(3, 'Skelett-Pfeil');
+          p.pos.x += a.vel.x * 0.02; p.pos.z += a.vel.z * 0.02;   // small knockback
+          dead = true; break;
+        }
+      }
+      a.mesh.position.copy(a.pos);
+      a.mesh.lookAt(a.pos.x + a.vel.x, a.pos.y + a.vel.y, a.pos.z + a.vel.z);
+      if (dead) {
+        this.scene.remove(a.mesh);
+        this.arrows.splice(i, 1);
+      }
+    }
+  }
+
   // ---------------- TNT ----------------
   igniteTnt(x, y, z) {
     this.world.setBlock(x, y, z, B.AIR);
@@ -1174,6 +1244,7 @@ class Game {
         hotbar: this.ui.hotbar,
         pos: [this.player.pos.x, this.player.pos.y, this.player.pos.z],
         look: [this.player.yaw, this.player.pitch],
+        spawn: this.spawnPoint,
         hp: this.player.health, hunger: this.player.hunger,
       };
       localStorage.setItem('blockwelt_save', JSON.stringify(save));

@@ -6,11 +6,12 @@ const B = {
   PLANKS: 8, GLASS: 9, WATER: 10, BEDROCK: 11, SNOWGRASS: 12, COAL: 13,
   IRON: 14, GOLD: 15, DIAMOND: 16, BRICK: 17, CACTUS: 18, FLOWER: 19,
   GLOWSTONE: 20, CRAFT: 21, TNT: 22, LAVA: 23, GRAVEL: 24, TALLGRASS: 25,
-  TORCH: 26, CHEST: 27,
-  // non-placeable items (food + tools)
+  TORCH: 26, CHEST: 27, WOOL: 28, BED: 29,
+  // non-placeable items (food + tools + materials)
   APPLE: 100, PORKCHOP: 101,
   PICK_WOOD: 102, PICK_STONE: 103, PICK_IRON: 104, PICK_DIA: 105,
-  SWORD_WOOD: 106, SWORD_STONE: 107, SWORD_IRON: 108, SWORD_DIA: 109
+  SWORD_WOOD: 106, SWORD_STONE: 107, SWORD_IRON: 108, SWORD_DIA: 109,
+  LEATHER: 110, BEEF: 111
 };
 
 // tex: [top, bottom, side] atlas tile indices
@@ -42,6 +43,8 @@ const BLOCKS = {
   [B.TALLGRASS]: { name: 'Hohes Gras',       tex: [23, 23, 23], hard: 0.05, cross: true, drops: null },
   [B.TORCH]:     { name: 'Fackel',           tex: [33, 33, 33], hard: 0.05, cross: true, glow: true, emit: 14 },
   [B.CHEST]:     { name: 'Truhe',            tex: [46, 46, 47], hard: 1.2 },
+  [B.WOOL]:      { name: 'Wolle',            tex: [49, 49, 49], hard: 0.7 },
+  [B.BED]:       { name: 'Bett',             tex: [50, 8, 51],  hard: 0.3 },
 };
 
 const ITEMS = {
@@ -55,6 +58,8 @@ const ITEMS = {
   [B.SWORD_STONE]: { name: 'Steinschwert',      tile: 39, tool: 'sword', tier: 2, dmg: 6 },
   [B.SWORD_IRON]:  { name: 'Eisenschwert',      tile: 44, tool: 'sword', tier: 3, dmg: 8 },
   [B.SWORD_DIA]:   { name: 'Diamantschwert',    tile: 45, tool: 'sword', tier: 4, dmg: 10 },
+  [B.LEATHER]:     { name: 'Leder',             tile: 52 },
+  [B.BEEF]:        { name: 'Rindfleisch',       tile: 53, food: 8 },
 };
 
 // blocks that mine faster with a pickaxe; ores additionally REQUIRE a tier
@@ -71,7 +76,7 @@ function isFluid(id)   { const b = BLOCKS[id]; return !!b && !!b.fluid; }
 const CREATIVE_BLOCKS = [
   B.GRASS, B.DIRT, B.STONE, B.COBBLE, B.SAND, B.GRAVEL, B.LOG, B.LEAVES,
   B.PLANKS, B.GLASS, B.BRICK, B.SNOWGRASS, B.COAL, B.IRON, B.GOLD, B.DIAMOND,
-  B.TORCH, B.GLOWSTONE, B.CRAFT, B.CHEST, B.TNT, B.CACTUS, B.FLOWER, B.TALLGRASS, B.WATER, B.LAVA, B.BEDROCK
+  B.TORCH, B.GLOWSTONE, B.CRAFT, B.CHEST, B.WOOL, B.BED, B.TNT, B.CACTUS, B.FLOWER, B.TALLGRASS, B.WATER, B.LAVA, B.BEDROCK
 ];
 
 // Simplified crafting recipes: { out, n, in: [[id, count], ...] }
@@ -84,6 +89,7 @@ const RECIPES = [
   { out: B.GLOWSTONE, n: 1, in: [[B.GOLD, 2], [B.COAL, 1]] },
   { out: B.TNT,    n: 1, in: [[B.SAND, 4], [B.COAL, 1]] },
   { out: B.CHEST,  n: 1, in: [[B.PLANKS, 8]] },
+  { out: B.BED,    n: 1, in: [[B.WOOL, 3], [B.PLANKS, 3]] },
   { out: B.PICK_WOOD,   n: 1, in: [[B.PLANKS, 3], [B.LOG, 1]] },
   { out: B.PICK_STONE,  n: 1, in: [[B.COBBLE, 3], [B.LOG, 1]] },
   { out: B.PICK_IRON,   n: 1, in: [[B.IRON, 3], [B.LOG, 1]] },
@@ -293,6 +299,37 @@ function buildAtlas(seed) {
     if (y === 6) return [104, 78, 46, 255];                  // lid seam
     if (x >= 7 && x <= 8 && y >= 5 && y <= 8) return [204, 184, 96, 255]; // latch
     return c;
+  });
+
+  noisy(49, 235, 232, 226, 8, (x, y, c) => {                 // 49 wool
+    if (rand() < 0.1) return [214, 210, 202, 255];           // weave dimples
+    return c;
+  });
+  noisy(50, 178, 52, 48, 10, (x, y, c) => {                  // 50 bed top (pillow + blanket)
+    if (x <= 4) return [238 + (rand() - .5) * 10, 238, 240, 255];
+    if (x === 5) return [140, 38, 36, 255];
+    if (y === 0 || y === 15) return [140, 38, 36, 255];
+    return c;
+  });
+  noisy(51, 178, 52, 48, 10, (x, y, c) => {                  // 51 bed side (blanket over wood)
+    if (y >= 8) return [150 + (rand() - .5) * 16, 116, 70, 255];
+    return c;
+  });
+  noisy(52, 0, 0, 0, 0, (x, y) => {                          // 52 leather item
+    const dx = (x - 8) / 6, dy = (y - 8) / 5.2;
+    if (dx * dx + dy * dy < 1) {
+      if ((x + y) % 5 === 0) return [136, 92, 52, 255];
+      return [160, 110, 62, 255];
+    }
+    return [0, 0, 0, 0];
+  });
+  noisy(53, 0, 0, 0, 0, (x, y) => {                          // 53 raw beef item
+    const dx = (x - 8) / 6, dy = (y - 8) / 4.6;
+    if (dx * dx + dy * dy < 1) {
+      if ((x * 3 + y * 2) % 7 === 0) return [235, 214, 208, 255];  // marbling
+      return [196, 60, 56, 255];
+    }
+    return [0, 0, 0, 0];
   });
 
   // 40..43: crack overlay stages (random cracks radiating from the centre)
