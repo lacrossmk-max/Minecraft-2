@@ -44,7 +44,7 @@ const BLOCKS = {
   [B.TORCH]:     { name: 'Fackel',           tex: [33, 33, 33], hard: 0.05, cross: true, glow: true, emit: 14 },
   [B.CHEST]:     { name: 'Truhe',            tex: [46, 46, 47], hard: 1.2 },
   [B.WOOL]:      { name: 'Wolle',            tex: [49, 49, 49], hard: 0.7 },
-  [B.BED]:       { name: 'Bett',             tex: [50, 8, 51],  hard: 0.3 },
+  [B.BED]:       { name: 'Bett',             tex: [50, 8, 51],  hard: 0.3, height: 0.5625, transparent: true },
 };
 
 const ITEMS = {
@@ -246,17 +246,28 @@ function buildAtlas(seed) {
     if (rand() < 0.15) return [95, 88, 82, 255];
     return c;
   });
-  noisy(31, 0, 0, 0, 0, (x, y) => {                          // 31 apple item
+  noisy(31, 0, 0, 0, 0, (x, y) => {                          // 31 apple item (outlined, with glint)
     const dx = x - 7.5, dy = y - 9;
-    if (dx * dx + dy * dy < 25) return [200, 30, 30, 255];
-    if (x === 8 && y > 2 && y < 5) return [100, 70, 40, 255];
-    if (y === 3 && x > 8 && x < 12) return [60, 140, 50, 255];
+    const d2 = dx * dx + dy * dy;
+    if (d2 < 25) {
+      if (dx < -1.5 && dy < -1 && d2 > 9) return [246, 120, 110, 255];  // glint
+      if (d2 > 18) return [142, 22, 22, 255];                            // shaded rim
+      return [206, 40, 36, 255];
+    }
+    if (d2 < 33) return [92, 16, 16, 255];                               // outline
+    if (x === 8 && y > 2 && y < 5) return [96, 66, 38, 255];             // stem
+    if (y === 3 && x > 8 && x < 12) return [66, 146, 54, 255];           // leaf
     return [0, 0, 0, 0];
   });
-  noisy(32, 0, 0, 0, 0, (x, y) => {                          // 32 porkchop item
+  noisy(32, 0, 0, 0, 0, (x, y) => {                          // 32 porkchop item (outlined)
     const dx = (x - 9) / 5, dy = (y - 7) / 6;
-    if (dx * dx + dy * dy < 1) return [235, 150, 150, 255];
-    if (y > 10 && y < 13 && x > 2 && x < 6) return [240, 230, 210, 255];
+    const d2 = dx * dx + dy * dy;
+    if (d2 < 1) {
+      if ((x * 2 + y) % 6 === 0) return [246, 196, 196, 255];            // fat streaks
+      return [232, 142, 140, 255];
+    }
+    if (d2 < 1.35) return [138, 74, 74, 255];                            // outline
+    if (y > 10 && y < 13 && x > 2 && x < 6) return [242, 232, 212, 255]; // bone
     return [0, 0, 0, 0];
   });
 

@@ -1,6 +1,78 @@
 // ---- Mobs: passive pigs, hostile zombies ----
 'use strict';
 
+// ---- procedural mob textures (cached per type) ----
+const MOB_TEX = {};
+
+// subtle shared noise so bodies don't look like flat plastic
+function mobNoiseTex() {
+  if (MOB_TEX._noise) return MOB_TEX._noise;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 16;
+  const c = cv.getContext('2d');
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+    const v = 235 + Math.random() * 20;
+    c.fillStyle = `rgb(${v},${v},${v})`;
+    c.fillRect(x, y, 1, 1);
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.magFilter = t.minFilter = THREE.NearestFilter;
+  t.colorSpace = THREE.SRGBColorSpace;
+  MOB_TEX._noise = t;
+  return t;
+}
+
+// 16x16 face texture per mob type: eyes, snouts, sockets
+function mobFaceTex(type) {
+  if (MOB_TEX[type]) return MOB_TEX[type];
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 16;
+  const c = cv.getContext('2d');
+  const px = (x, y, col, w = 1, h = 1) => { c.fillStyle = col; c.fillRect(x, y, w, h); };
+  const base = (col) => {
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const j = (Math.random() - 0.5) * 14;
+      c.fillStyle = `rgb(${col[0] + j | 0},${col[1] + j | 0},${col[2] + j | 0})`;
+      c.fillRect(x, y, 1, 1);
+    }
+  };
+  if (type === 'pig') {
+    base([237, 163, 168]);
+    px(3, 5, '#2a2a35', 2, 2); px(11, 5, '#2a2a35', 2, 2);        // eyes
+    px(5, 9, '#d4788a', 6, 4);                                     // snout
+    px(6, 10, '#5c2b38', 1, 2); px(9, 10, '#5c2b38', 1, 2);        // nostrils
+  } else if (type === 'cow') {
+    base([107, 74, 47]);
+    px(6, 0, '#e8e2d4', 4, 10);                                    // blaze
+    px(2, 5, '#2a2a30', 2, 2); px(12, 5, '#2a2a30', 2, 2);         // eyes
+    px(4, 11, '#caa8a0', 8, 5); px(5, 12, '#8c5f56', 2, 2); px(9, 12, '#8c5f56', 2, 2);
+  } else if (type === 'sheep') {
+    base([232, 230, 224]);
+    px(3, 6, '#c8bfae', 10, 10);                                   // face patch
+    px(4, 8, '#2a2a30', 2, 2); px(10, 8, '#2a2a30', 2, 2);         // eyes
+    px(6, 13, '#a08874', 4, 2);                                    // muzzle
+  } else if (type === 'zombie') {
+    base([74, 122, 58]);
+    px(3, 5, '#101418', 3, 2); px(10, 5, '#101418', 3, 2);         // hollow eyes
+    px(5, 10, '#2c4a24', 6, 1); px(6, 11, '#2c4a24', 2, 2);        // torn mouth
+  } else if (type === 'skeleton') {
+    base([216, 216, 208]);
+    px(2, 4, '#26262c', 4, 3); px(10, 4, '#26262c', 4, 3);         // sockets
+    px(7, 8, '#4a4a50', 2, 2);                                     // nose hole
+    for (let x = 3; x <= 12; x += 2) px(x, 12, '#5a5a60', 1, 3);   // teeth
+  } else if (type === 'villager') {
+    base([214, 167, 122]);
+    px(3, 6, '#2e2a26', 2, 2); px(11, 6, '#2e2a26', 2, 2);         // eyes
+    px(3, 4, '#6e5638', 10, 1);                                    // unibrow
+    px(5, 13, '#a5765a', 6, 1);                                    // mouth
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.magFilter = t.minFilter = THREE.NearestFilter;
+  t.colorSpace = THREE.SRGBColorSpace;
+  MOB_TEX[type] = t;
+  return t;
+}
+
 const MOB_DEFS = {
   pig:      { w: 0.8, h: 0.9, speed: 1.4, health: 10, color: 0xeda3a8, max: 4 },
   cow:      { w: 0.9, h: 1.4, speed: 1.2, health: 12, color: 0x6b4a2f, max: 3 },
@@ -30,10 +102,20 @@ class Mob {
 
   _buildMesh() {
     const g = new THREE.Group();
-    const mat = new THREE.MeshLambertMaterial({ color: this.def.color });
-    const dark = new THREE.MeshLambertMaterial({ color: new THREE.Color(this.def.color).multiplyScalar(0.7) });
+    const noise = mobNoiseTex();
+    const mat = new THREE.MeshLambertMaterial({ color: this.def.color, map: noise });
+    const dark = new THREE.MeshLambertMaterial({ color: new THREE.Color(this.def.color).multiplyScalar(0.7), map: noise });
     const box = (w, h, d, x, y, z, m) => {
       const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m || mat);
+      b.position.set(x, y, z);
+      g.add(b); return b;
+    };
+    // head box: textured face on the front (-z), noise-tinted skin elsewhere
+    const head = (w, h, d, x, y, z, skinColor) => {
+      const side = new THREE.MeshLambertMaterial({ color: skinColor, map: noise });
+      const face = new THREE.MeshLambertMaterial({ map: mobFaceTex(this.type) });
+      const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d),
+        [side, side, side, side, side, face]);   // -z front carries the face
       b.position.set(x, y, z);
       g.add(b); return b;
     };
@@ -48,40 +130,38 @@ class Mob {
     this.limbs = []; this.limbPhase = [];
     if (this.type === 'pig') {
       box(0.7, 0.5, 1.0, 0, 0.55, 0);                 // body
-      box(0.45, 0.45, 0.45, 0, 0.75, -0.6);           // head
-      box(0.18, 0.12, 0.06, 0, 0.68, -0.85, dark);    // snout
+      head(0.55, 0.5, 0.5, 0, 0.75, -0.65, this.def.color);
       const legPos = [[-0.2, -0.35], [0.2, -0.35], [-0.2, 0.35], [0.2, 0.35]];
       legPos.forEach(([x, z], i) => {
         this.limbs.push(limb(0.18, 0.35, 0.18, x, 0.35, z, dark));
         this.limbPhase.push(i === 0 || i === 3 ? 0 : Math.PI);   // diagonal gait
       });
     } else if (this.type === 'cow') {
-      const white = new THREE.MeshLambertMaterial({ color: 0xf3efe6 });
+      const white = new THREE.MeshLambertMaterial({ color: 0xf3efe6, map: noise });
       box(0.85, 0.7, 1.3, 0, 0.9, 0);                 // body
       box(0.6, 0.25, 0.5, 0, 0.62, 0.35, white);      // belly patch
-      box(0.5, 0.5, 0.5, 0, 1.1, -0.85);              // head
-      box(0.32, 0.2, 0.12, 0, 0.96, -1.14, white);    // snout
-      box(0.1, 0.12, 0.1, -0.28, 1.38, -0.8, white);  // horns
-      box(0.1, 0.12, 0.1, 0.28, 1.38, -0.8, white);
+      head(0.52, 0.52, 0.5, 0, 1.1, -0.88, this.def.color);
+      box(0.1, 0.12, 0.14, -0.29, 1.4, -0.82, white); // horns
+      box(0.1, 0.12, 0.14, 0.29, 1.4, -0.82, white);
       const legPos = [[-0.26, -0.42], [0.26, -0.42], [-0.26, 0.42], [0.26, 0.42]];
       legPos.forEach(([x, z], i) => {
         this.limbs.push(limb(0.2, 0.55, 0.2, x, 0.55, z, dark));
         this.limbPhase.push(i === 0 || i === 3 ? 0 : Math.PI);
       });
     } else if (this.type === 'sheep') {
-      const face = new THREE.MeshLambertMaterial({ color: 0xb5aa9c });
+      const face = new THREE.MeshLambertMaterial({ color: 0xb5aa9c, map: noise });
       box(0.9, 0.8, 1.2, 0, 0.95, 0);                 // wool body
-      box(0.42, 0.42, 0.5, 0, 1.25, -0.75, face);     // head
-      box(0.46, 0.3, 0.24, 0, 1.3, -0.6);             // wool cap
+      head(0.44, 0.46, 0.5, 0, 1.25, -0.78, 0xb5aa9c);
+      box(0.5, 0.3, 0.28, 0, 1.42, -0.62);            // wool cap
       const legPos = [[-0.22, -0.35], [0.22, -0.35], [-0.22, 0.35], [0.22, 0.35]];
       legPos.forEach(([x, z], i) => {
         this.limbs.push(limb(0.18, 0.55, 0.18, x, 0.55, z, face));
         this.limbPhase.push(i === 0 || i === 3 ? 0 : Math.PI);
       });
     } else if (this.type === 'skeleton') {
-      const bow = new THREE.MeshLambertMaterial({ color: 0x7a5a34 });
+      const bow = new THREE.MeshLambertMaterial({ color: 0x7a5a34, map: noise });
       box(0.4, 0.65, 0.2, 0, 1.2, 0);                 // ribcage
-      box(0.42, 0.42, 0.42, 0, 1.75, 0, dark);        // skull
+      head(0.48, 0.48, 0.48, 0, 1.78, 0, this.def.color);  // skull
       box(0.12, 0.12, 0.55, -0.24, 1.42, -0.3);       // aiming arm
       box(0.12, 0.5, 0.12, 0.24, 1.2, 0);             // hanging arm
       box(0.07, 0.6, 0.07, -0.24, 1.42, -0.6, bow);   // bow
@@ -89,19 +169,19 @@ class Mob {
       this.limbs.push(limb(0.14, 0.8, 0.14, 0.12, 0.85, 0));
       this.limbPhase.push(0, Math.PI);
     } else if (this.type === 'villager') {
-      const skin = new THREE.MeshLambertMaterial({ color: 0xd6a77a });
+      const skin = new THREE.MeshLambertMaterial({ color: 0xd6a77a, map: noise });
       box(0.52, 0.8, 0.34, 0, 1.1, 0);                // brown robe torso
       box(0.44, 0.5, 0.3, 0, 0.45, 0, dark);          // robe skirt
-      box(0.4, 0.4, 0.4, 0, 1.75, 0, skin);           // head
-      box(0.08, 0.16, 0.08, 0, 1.68, -0.23, skin);    // the nose
+      head(0.46, 0.46, 0.44, 0, 1.78, 0, 0xd6a77a);
+      box(0.08, 0.18, 0.08, 0, 1.7, -0.26, skin);     // the nose
       box(0.5, 0.16, 0.2, 0, 1.15, -0.2);             // folded arms
       this.limbs.push(limb(0.18, 0.45, 0.18, -0.12, 0.45, 0, dark));
       this.limbs.push(limb(0.18, 0.45, 0.18, 0.12, 0.45, 0, dark));
       this.limbPhase.push(0, Math.PI);
     } else {
-      const pants = new THREE.MeshLambertMaterial({ color: 0x3a4a8a });
+      const pants = new THREE.MeshLambertMaterial({ color: 0x3a4a8a, map: noise });
       box(0.5, 0.7, 0.3, 0, 1.05, 0);                 // torso
-      box(0.42, 0.42, 0.42, 0, 1.6, 0, dark);         // head
+      head(0.48, 0.48, 0.48, 0, 1.66, 0, this.def.color);
       box(0.16, 0.65, 0.16, -0.34, 1.2, -0.2);        // arms (stretched forward-ish)
       box(0.16, 0.65, 0.16, 0.34, 1.2, -0.2);
       this.limbs.push(limb(0.2, 0.7, 0.2, -0.13, 0.7, 0, pants));
@@ -212,7 +292,11 @@ class Mob {
       this.limbs[i].rotation.x += (target - this.limbs[i].rotation.x) * Math.min(1, dt * 12);
     }
     const flash = this.hurtT > 0;
-    this.mesh.traverse(o => { if (o.isMesh) o.material.emissive?.setHex(flash ? 0x883333 : 0x000000); });
+    this.mesh.traverse(o => {
+      if (!o.isMesh) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const mt of mats) mt.emissive?.setHex(flash ? 0x883333 : 0x000000);
+    });
   }
 
   hurt(dmg, from) {
@@ -261,11 +345,15 @@ class MobManager {
           g.particles.burst(m.pos.x, m.pos.y + 0.5, m.pos.z, m.def.color, 12);
           g.sound.play('die');
           if (g.mode === 'survival') {
-            if (m.type === 'pig') { g.addItem(B.PORKCHOP, 1); g.toast('+1 Kotelett'); }
-            else if (m.type === 'cow') { g.addItem(B.LEATHER, 1); g.addItem(B.BEEF, 1); g.toast('+1 Leder, +1 Rindfleisch'); }
+            const give = (id, n, msg) => {
+              g.addItem(id, n); g.toast(msg);
+              g.spawnPickup(m.pos.x, m.pos.y + 0.6, m.pos.z, id);
+            };
+            if (m.type === 'pig') give(B.PORKCHOP, 1, '+1 Kotelett');
+            else if (m.type === 'cow') { give(B.LEATHER, 1, '+1 Leder, +1 Rindfleisch'); g.addItem(B.BEEF, 1); }
             else if (m.type === 'sheep') {
               const n = 1 + (Math.random() < 0.5 ? 1 : 0);
-              g.addItem(B.WOOL, n); g.toast('+' + n + ' Wolle');
+              give(B.WOOL, n, '+' + n + ' Wolle');
             }
           }
         }

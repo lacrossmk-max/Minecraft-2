@@ -490,7 +490,9 @@ class World {
           acc.uv.push(tu, tv,  tu + tsi, tv,  tu, tv + tsi,  tu + tsi, tv + tsi);
           const ownL = Math.pow(getLight(wx, ly, wz) / 15, 1.3);
           for (let i = 0; i < 4; i++) { acc.col.push(0.9, 0.9, 0.9); acc.nor.push(0, 1, 0); acc.bli.push(ownL); }
-          acc.sw.push(0, 0, 1, 1);           // top vertices wave in the wind
+          // only plants wave in the wind — torches stay firmly planted
+          const swayAmt = (id === B.FLOWER || id === B.TALLGRASS) ? 1 : 0;
+          acc.sw.push(0, 0, swayAmt, swayAmt);
           acc.ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
         }
         continue;
@@ -520,6 +522,7 @@ class World {
           opts.hTop = this.getBlock(wx, ly + 1, wz) !== id ? 0.875 : 1;
           opts.blFlat = Math.pow(getLight(nx, ny, nz) / 15, 1.3);
         } else {
+          if (def.height) opts.hTop = def.height;   // furniture like beds is not full height
           cornerData(face, wx, ly, wz, aoBuf, blBuf);
           opts.bl = blBuf;
           if (!def.glow) opts.ao = aoBuf;

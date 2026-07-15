@@ -111,6 +111,7 @@ class Game {
     this.chests = new Map();            // "x,y,z" -> Map(item id -> count)
     this.tnt = [];                      // active {x,y,z,t,mesh}
     this.arrows = [];                   // skeleton arrows in flight
+    this.pickups = [];                  // pickup fly-to-player animations
     this.mode = 'survival';
     this.ui = new UI(this);
     this.controls = new Controls(this);
@@ -226,6 +227,7 @@ class Game {
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
     tex.colorSpace = THREE.SRGBColorSpace;
+    this.atlasTex = tex;
     this.ui.setAtlas(atlas);
 
     // scrolling fluid textures (world-space UVs come from the mesher)
@@ -827,6 +829,7 @@ class Game {
     this.particles.update(dt);
     this.updateTnt(dt);
     this.updateArrows(dt);
+    this.updatePickups(dt);
     this.updateWeather(dt);
     this.updateDayNight(dt);
     this.updateBlockLights(dt);
@@ -1090,6 +1093,7 @@ class Game {
       if (drop != null) {
         this.addItem(drop, 1);
         this.sound.play('pickup');
+        this.spawnPickup(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, drop);
       }
     }
     this.ui.refreshHotbar();
@@ -1103,6 +1107,41 @@ class Game {
       if (free >= 0) this.ui.hotbar[free] = id;
     }
     this.ui.refreshHotbar();
+  }
+
+  // ---------------- pickup animation (mini cube flies to the player) ----------------
+  spawnPickup(x, y, z, id) {
+    if (!this.atlasTex || this.pickups.length > 12) return;
+    const geo = new THREE.BoxGeometry(0.26, 0.26, 0.26);
+    if (BLOCKS[id]) this._setCubeUVs(geo, this._blockTiles(id));
+    else if (ITEMS[id]) { const t = ITEMS[id].tile; this._setCubeUVs(geo, [t, t, t, t, t, t]); }
+    else { geo.dispose(); return; }
+    const m = new THREE.Mesh(geo, this._pickupMat ||
+      (this._pickupMat = new THREE.MeshLambertMaterial({ map: this.atlasTex, transparent: true, alphaTest: 0.1 })));
+    m.position.set(x, y, z);
+    this.scene.add(m);
+    this.pickups.push({ m, t: 0, sx: x, sy: y, sz: z });
+  }
+
+  updatePickups(dt) {
+    const p = this.player;
+    for (let i = this.pickups.length - 1; i >= 0; i--) {
+      const k = this.pickups[i];
+      k.t += dt / 0.45;
+      const e = Math.min(1, k.t) ** 2;                    // ease toward the player
+      k.m.position.set(
+        k.sx + (p.pos.x - k.sx) * e,
+        k.sy + 0.4 * Math.sin(Math.min(1, k.t) * Math.PI) + (p.pos.y + 1.0 - k.sy) * e,
+        k.sz + (p.pos.z - k.sz) * e);
+      k.m.rotation.y += dt * 7;
+      const s = 1 - e * 0.7;
+      k.m.scale.set(s, s, s);
+      if (k.t >= 1) {
+        this.scene.remove(k.m);
+        k.m.geometry.dispose();
+        this.pickups.splice(i, 1);
+      }
+    }
   }
 
   // ---------------- skeleton arrows ----------------
