@@ -107,8 +107,9 @@ class Game {
     this.dayLength = 1200;              // seconds per full day (20 min, like the classics)
     this.weather = { type: 'clear', t: 90 + Math.random() * 90 };
     this.daylight = 1;
-    this.inventory = new Map();         // survival: item id -> count
-    this.chests = new Map();            // "x,y,z" -> Map(item id -> count)
+    // slot-based inventory: 36 slots of {id,count}|null — slots 0..8 ARE the hotbar
+    this.inv = new Array(36).fill(null);
+    this.chests = new Map();            // "x,y,z" -> array of 15 slots {id,count}|null
     this.tnt = [];                      // active {x,y,z,t,mesh}
     this.arrows = [];                   // skeleton arrows in flight
     this.pickups = [];                  // pickup fly-to-player animations
@@ -288,11 +289,34 @@ class Game {
       this.mode = save.mode;
       this.timeOfDay = save.time ?? 0.3;
       for (const [k, v] of Object.entries(save.edits || {})) this.world.edits.set(k, v);
-      for (const [k, v] of Object.entries(save.inv || {})) this.inventory.set(+k, v);
-      for (const [k, obj] of Object.entries(save.chests || {})) {
-        this.chests.set(k, new Map(Object.entries(obj).map(([i, c]) => [+i, c])));
+      if (save.inv2) {
+        // slot format
+        save.inv2.forEach((s, i) => { if (s && i < 36) this.inv[i] = { id: s[0], count: s[1] }; });
+      } else if (save.inv) {
+        // migrate old count-map format: hotbar ids first, remainder into storage
+        const counts = new Map(Object.entries(save.inv).map(([i, c]) => [+i, c]));
+        (save.hotbar || []).forEach((id, i) => {
+          if (id && (counts.get(id) || 0) > 0 && i < 9) {
+            const n = Math.min(counts.get(id), this.stackMax(id));
+            this.inv[i] = { id, count: n };
+            counts.set(id, counts.get(id) - n);
+          }
+        });
+        for (const [id, c] of counts) if (c > 0) this.invAdd(id, c);
       }
-      if (save.hotbar) this.ui.hotbar = save.hotbar;
+      for (const [k, val] of Object.entries(save.chests || {})) {
+        if (Array.isArray(val)) {
+          this.chests.set(k, val.map(s => s ? { id: s[0], count: s[1] } : null));
+        } else {
+          // migrate old chest map format into slots
+          const slots = new Array(15).fill(null);
+          let i = 0;
+          for (const [id, c] of Object.entries(val)) {
+            if (c > 0 && i < 15) slots[i++] = { id: +id, count: c };
+          }
+          this.chests.set(k, slots);
+        }
+      }
       if (save.pos) this.player.pos.set(save.pos[0], save.pos[1], save.pos[2]);
       if (save.look) { this.player.yaw = save.look[0]; this.player.pitch = save.look[1]; }
       if (save.hp != null) this.player.health = save.hp;
@@ -309,6 +333,11 @@ class Game {
       const sy = this.world.surfaceHeight(sx, sz) + 1;
       this.player.pos.set(sx + 0.5, sy + 0.5, sz + 0.5);
       this.spawnPoint = [sx + 0.5, sy + 0.5, sz + 0.5];
+      // creative worlds start with a handy hotbar selection
+      if (this.mode === 'creative') {
+        [B.GRASS, B.DIRT, B.STONE, B.PLANKS, B.LOG, B.GLASS, B.TORCH, B.TNT, B.FLOWER]
+          .forEach((id, i) => { this.inv[i] = { id, count: 1 }; });
+      }
     }
     this.spawnPoint = this.spawnPoint || [this.player.pos.x, this.player.pos.y, this.player.pos.z];
     this.applyFog();
@@ -387,7 +416,7 @@ class Game {
       ok = by >= 1 && by < HEIGHT &&
         (cur === B.AIR || isFluid(cur) || !!BLOCKS[cur]?.cross) &&
         !(isSolid(item) && this.player.placementBlocked(bx, by, bz)) &&
-        (this.mode === 'creative' || (this.inventory.get(item) || 0) > 0);
+        (this.mode === 'creative' || !!this.inv[this.ui.selected]);
     }
     if (ok) {
       this._setGhostTile(item);
@@ -980,10 +1009,9 @@ class Game {
     if (hit && hit.id === B.CHEST) { this.ui.openChest(hit.x + ',' + hit.y + ',' + hit.z); return; }
 
     // 3) food? -> eat (also works when tapping the sky)
-    if (ITEMS[item] && ITEMS[item].food && this.mode === 'survival' &&
-        (this.inventory.get(item) || 0) > 0) {
+    if (ITEMS[item] && ITEMS[item].food && this.mode === 'survival') {
       if (this.player.hunger >= 19.5) { this.toast('Nicht hungrig'); return; }
-      this.inventory.set(item, this.inventory.get(item) - 1);
+      this.consumeSelected();
       this.player.hunger = Math.min(20, this.player.hunger + ITEMS[item].food);
       this.sound.play('eat');
       this.ui.refreshHotbar();
@@ -1014,23 +1042,70 @@ class Game {
     const cur = this.world.getBlock(bx, by, bz);
     if (cur !== B.AIR && !isFluid(cur) && !BLOCKS[cur]?.cross) return;
     if (isSolid(item) && this.player.placementBlocked(bx, by, bz)) return;
-    if (this.mode === 'survival') {
-      const have = this.inventory.get(item) || 0;
-      if (have <= 0) { this.toast('Kein ' + itemName(item) + ' im Inventar'); return; }
-      this.inventory.set(item, have - 1);
-    }
+    if (this.mode === 'survival' && !this.consumeSelected()) return;
     this.world.setBlock(bx, by, bz, item);
     this.sound.play('place');
     this.ui.refreshHotbar();
   }
 
+  // ---------------- slot inventory ----------------
+  stackMax(id) { return ITEMS[id] && ITEMS[id].tool ? 1 : 64; }
+
+  invCount(id) {
+    let n = 0;
+    for (const s of this.inv) if (s && s.id === id) n += s.count;
+    return n;
+  }
+
+  // add n of id: fill existing stacks first, then empty slots (hotbar first).
+  // returns the amount that did NOT fit
+  invAdd(id, n) {
+    const max = this.stackMax(id);
+    for (const s of this.inv) {
+      if (n <= 0) break;
+      if (s && s.id === id && s.count < max) {
+        const take = Math.min(n, max - s.count);
+        s.count += take; n -= take;
+      }
+    }
+    for (let i = 0; i < this.inv.length && n > 0; i++) {
+      if (!this.inv[i]) {
+        const take = Math.min(n, max);
+        this.inv[i] = { id, count: take }; n -= take;
+      }
+    }
+    return n;
+  }
+
+  // remove n of id from any slots; returns true if fully removed
+  invRemove(id, n) {
+    if (this.invCount(id) < n) return false;
+    for (let i = 0; i < this.inv.length && n > 0; i++) {
+      const s = this.inv[i];
+      if (s && s.id === id) {
+        const take = Math.min(n, s.count);
+        s.count -= take; n -= take;
+        if (s.count <= 0) this.inv[i] = null;
+      }
+    }
+    return true;
+  }
+
+  // consume one item from the SELECTED hotbar slot (for placing / eating)
+  consumeSelected() {
+    const s = this.inv[this.ui.selected];
+    if (!s) return false;
+    s.count--;
+    if (s.count <= 0) this.inv[this.ui.selected] = null;
+    return true;
+  }
+
   // ---------------- tools ----------------
-  // currently held tool (survival requires actually owning it)
+  // currently held tool (must sit in the selected hotbar slot)
   heldTool() {
     const id = this.ui.currentItem();
     const it = ITEMS[id];
     if (!it || !it.tool) return null;
-    if (this.mode === 'survival' && (this.inventory.get(id) || 0) <= 0) return null;
     return it;
   }
 
@@ -1077,8 +1152,9 @@ class Game {
       const ck = hit.x + ',' + hit.y + ',' + hit.z;
       const stored = this.chests.get(ck);
       if (stored && this.mode === 'survival') {
-        for (const [id, n] of stored) if (n > 0) this.addItem(id, n);
-        if (stored.size) this.toast('Truheninhalt eingesammelt');
+        let any = false;
+        for (const s of stored) if (s) { this.addItem(s.id, s.count); any = true; }
+        if (any) this.toast('Truheninhalt eingesammelt');
       }
       this.chests.delete(ck);
     }
@@ -1100,12 +1176,8 @@ class Game {
   }
 
   addItem(id, n) {
-    this.inventory.set(id, (this.inventory.get(id) || 0) + n);
-    // auto-assign to a free hotbar slot if not present
-    if (!this.ui.hotbar.includes(id)) {
-      const free = this.ui.hotbar.findIndex(s => !s || (this.mode === 'survival' && !(this.inventory.get(s) > 0) && !ITEMS[s]));
-      if (free >= 0) this.ui.hotbar[free] = id;
-    }
+    const left = this.invAdd(id, n);
+    if (left > 0) this.toast('Inventar voll!');
     this.ui.refreshHotbar();
   }
 
@@ -1278,9 +1350,9 @@ class Game {
       const save = {
         seed: this.seed, mode: this.mode, time: this.timeOfDay,
         edits: Object.fromEntries(this.world.edits),
-        inv: Object.fromEntries(this.inventory),
-        chests: Object.fromEntries([...this.chests].map(([k, m]) => [k, Object.fromEntries(m)])),
-        hotbar: this.ui.hotbar,
+        inv2: this.inv.map(s => s ? [s.id, s.count] : null),
+        chests: Object.fromEntries([...this.chests].map(([k, slots]) =>
+          [k, slots.map(s => s ? [s.id, s.count] : null)])),
         pos: [this.player.pos.x, this.player.pos.y, this.player.pos.z],
         look: [this.player.yaw, this.player.pitch],
         spawn: this.spawnPoint,

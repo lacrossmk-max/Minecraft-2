@@ -104,11 +104,45 @@
     border-radius:4px; font-size:13px; }
   .recipe button:disabled { background:#555; color:#999; }
 
-  .chestgrid { display:grid; grid-template-columns:repeat(auto-fill,52px); gap:6px;
-    width:min(92vw,480px); max-height:28vh; overflow-y:auto; justify-content:center;
-    padding:8px; background:rgba(0,0,0,.4); border-radius:8px; margin-top:4px; }
-  .chestgrid .slot { width:52px; height:52px; cursor:pointer; }
+  .chestgrid { display:grid; grid-template-columns:repeat(9,46px); gap:4px;
+    width:min(94vw,470px); max-height:26vh; overflow-y:auto; justify-content:center;
+    padding:6px; background:rgba(0,0,0,.4); border-radius:8px; margin-top:4px; }
+  .chestgrid .slot { width:46px; height:46px; cursor:pointer; }
   .chestgrid .empty-note { padding:12px; color:#999; font-size:13px; grid-column:1/-1; text-align:center; }
+
+  .cursor-bar { display:flex; align-items:center; gap:10px; margin:4px 0;
+    background:rgba(90,150,60,.25); border:1px solid #6a5; border-radius:8px;
+    padding:4px 12px 4px 4px; cursor:pointer; color:#cfc; font-size:13px; }
+  .cursor-bar .slot { width:42px; height:42px; }
+
+  #craft-cards { display:grid; grid-template-columns:repeat(auto-fill,46px); gap:4px;
+    width:min(94vw,470px); max-height:16vh; overflow-y:auto; justify-content:center;
+    padding:6px; background:rgba(0,0,0,.4); border-radius:8px; }
+  .craft-card { width:46px; height:46px; position:relative; border-radius:4px;
+    border:2px solid #444; background:rgba(0,0,0,.45); cursor:pointer; }
+  .craft-card .icon { position:absolute; inset:5px; background-size:800% 800%; image-rendering:pixelated; }
+  .craft-card .cnt { position:absolute; right:2px; bottom:1px; color:#fff; font-size:11px;
+    font-weight:bold; text-shadow:1px 1px 0 #000; }
+  .craft-card.ok { border-color:#5b5; }
+  .craft-card.miss .icon { opacity:.4; }
+  .craft-card.locked .icon { opacity:.25; }
+  .craft-card .lock { position:absolute; left:0; right:0; top:12px; text-align:center; font-size:16px; }
+  .craft-card.picked { border-color:#fff; box-shadow:0 0 6px #fff; }
+
+  #craft-detail { width:min(94vw,470px); background:rgba(0,0,0,.5); border-radius:8px;
+    padding:8px 10px; margin-top:6px; font-size:13px; }
+  #craft-detail .craft-name { margin-bottom:5px; }
+  #craft-detail .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  #craft-detail .chip { display:inline-flex; align-items:center; gap:5px;
+    padding:3px 8px 3px 4px; border-radius:5px; background:rgba(255,255,255,.08); }
+  #craft-detail .chip .icon { width:22px; height:22px; display:inline-block;
+    background-size:800% 800%; image-rendering:pixelated; }
+  #craft-detail .chip.have { border:1px solid #5b5; }
+  #craft-detail .chip.lack { border:1px solid #b55; color:#e99; }
+  #craft-detail .craft-btns { display:flex; gap:8px; }
+  #craft-detail button { flex:1; padding:9px; background:#4c9141; color:#fff;
+    border:none; border-radius:5px; font-size:14px; }
+  #craft-detail button:disabled { background:#555; color:#999; }
 
   #death-screen { background:rgba(120,0,0,.7); display:none; }
   #loading { display:none; }
@@ -202,19 +236,35 @@
 
 <div class="overlay" id="inventory">
   <h2 id="inv-title">Inventar</h2>
-  <div id="inv-grid"></div>
-  <h2 style="margin-top:14px;font-size:17px" id="craft-title">Handwerk</h2>
-  <div id="craft-list"></div>
-  <button class="mbtn green" id="btn-inv-close" style="margin-top:12px">Schließen</button>
+  <div class="cursor-bar" id="cursor-bar" style="display:none">
+    <div class="slot"><div class="icon"></div><div class="cnt"></div></div>
+    <span class="cursor-hint"></span>
+  </div>
+  <div id="palette-wrap" style="display:none">
+    <div class="sub" style="margin:2px 0">Blöcke &amp; Gegenstände — tippen zum Aufnehmen</div>
+    <div class="chestgrid" id="palette-grid"></div>
+  </div>
+  <div class="sub" style="margin:6px 0 0">Rucksack</div>
+  <div class="chestgrid" id="inv-grid"></div>
+  <div class="sub" style="margin:6px 0 0">Hotbar</div>
+  <div class="chestgrid" id="inv-hotbar"></div>
+  <h2 style="margin-top:10px;font-size:17px" id="craft-title">Handwerk</h2>
+  <div id="craft-cards"></div>
+  <div id="craft-detail" style="display:none"></div>
+  <button class="mbtn green" id="btn-inv-close" style="margin-top:10px">Schließen</button>
 </div>
 
 <div class="overlay" id="chest-ui" style="display:none">
   <h2>📦 Truhe</h2>
-  <div class="sub" style="margin-bottom:4px">Tippen zum Herausnehmen</div>
+  <div class="cursor-bar" id="cursor-bar-chest" style="display:none">
+    <div class="slot"><div class="icon"></div><div class="cnt"></div></div>
+    <span class="cursor-hint"></span>
+  </div>
+  <div class="sub" style="margin-bottom:2px">Stapel antippen zum Aufnehmen, Ziel-Slot antippen zum Ablegen</div>
   <div class="chestgrid" id="chest-grid"></div>
-  <div class="sub" style="margin:10px 0 4px">Dein Inventar — tippen zum Einlagern</div>
+  <div class="sub" style="margin:8px 0 2px">Dein Inventar</div>
   <div class="chestgrid" id="chest-inv-grid"></div>
-  <button class="mbtn green" id="btn-chest-close" style="margin-top:12px">Schließen</button>
+  <button class="mbtn green" id="btn-chest-close" style="margin-top:10px">Schließen</button>
 </div>
 
 <div class="overlay" id="death-screen">

@@ -1,11 +1,13 @@
-// ---- UI: hotbar, inventory, crafting, HUD, menus ----
+// ---- UI: hotbar, slot inventory, crafting, chest, HUD, menus ----
 'use strict';
 
 class UI {
   constructor(game) {
     this.game = game;
-    this.selected = 0;
-    this.hotbar = [B.GRASS, B.DIRT, B.STONE, B.PLANKS, B.LOG, B.GLASS, B.SAND, B.TNT, B.FLOWER];
+    this.selected = 0;          // hotbar index (inv slots 0..8)
+    this.cursor = null;         // picked-up stack {id,count} while an overlay is open
+    this.chestKey = null;
+    this.craftSel = -1;         // selected recipe card index
     this.atlasUrl = null;
     this._buildHotbar();
     this._bindMenus();
@@ -16,7 +18,7 @@ class UI {
     this.refreshHotbar();
   }
 
-  // ---------------- hotbar ----------------
+  // ---------------- hotbar (HUD) ----------------
   _buildHotbar() {
     const bar = document.getElementById('hotbar');
     bar.innerHTML = '';
@@ -32,36 +34,38 @@ class UI {
   selectSlot(i) {
     this.selected = i;
     this.refreshHotbar();
-    const id = this.hotbar[i];
-    if (id) this.game.toast(itemName(id), 700);
+    const s = this.game.inv[i];
+    if (s) this.game.toast(itemName(s.id), 700);
   }
 
-  currentItem() { return this.hotbar[this.selected] || 0; }
+  currentItem() {
+    const s = this.game.inv[this.selected];
+    return s ? s.id : 0;
+  }
 
   refreshHotbar() {
     const g = this.game;
     const slots = document.querySelectorAll('#hotbar .slot');
-    slots.forEach((s, i) => {
-      s.classList.toggle('sel', i === this.selected);
-      const id = this.hotbar[i];
-      const icon = s.querySelector('.icon'), cnt = s.querySelector('.cnt');
-      if (id && this.atlasUrl) {
-        icon.style.backgroundImage = `url(${this.atlasUrl})`;
-        icon.style.backgroundPosition = tileCss(id);
-        icon.style.display = 'block';
-        if (g.mode === 'survival') {
-          const have = g.inventory.get(id) || 0;
-          cnt.textContent = have > 0 ? have : '';
-          icon.style.opacity = have > 0 ? 1 : 0.25;
-        } else {
-          cnt.textContent = '';
-          icon.style.opacity = 1;
-        }
-      } else {
-        icon.style.display = 'none';
-        cnt.textContent = '';
-      }
+    slots.forEach((el, i) => {
+      el.classList.toggle('sel', i === this.selected);
+      this._paintSlot(el, g.inv[i]);
     });
+  }
+
+  _paintSlot(el, s) {
+    const icon = el.querySelector('.icon'), cnt = el.querySelector('.cnt');
+    if (s && this.atlasUrl) {
+      icon.style.backgroundImage = `url(${this.atlasUrl})`;
+      icon.style.backgroundPosition = tileCss(s.id);
+      icon.style.display = 'block';
+      icon.style.opacity = 1;
+      cnt.textContent = (this.game.mode === 'survival' && s.count > 1) ? s.count : '';
+      el.title = itemName(s.id);
+    } else {
+      icon.style.display = 'none';
+      cnt.textContent = '';
+      el.title = '';
+    }
   }
 
   // ---------------- status bars ----------------
@@ -78,120 +82,231 @@ class UI {
     ar.textContent = p.eyeInWater ? '⬤'.repeat(Math.max(0, Math.ceil(p.air))) : '';
   }
 
+  // ---------------- slot grids & the pick-up cursor ----------------
+  _listRef(list) {
+    if (list === 'inv') return this.game.inv;
+    if (list === 'chest') return this.game.chests.get(this.chestKey);
+    return null;
+  }
+
+  // render `arr` slots into element `el` (subRange = [start,end) of indices)
+  _renderGrid(el, list, start, end) {
+    const arr = this._listRef(list);
+    el.innerHTML = '';
+    for (let i = start; i < end; i++) {
+      const s = document.createElement('div');
+      s.className = 'slot';
+      s.innerHTML = '<div class="icon"></div><div class="cnt"></div>';
+      this._paintSlot(s, arr[i]);
+      if (list === 'inv' && i === this.selected) s.classList.add('sel');
+      s.addEventListener('pointerdown', e => { e.stopPropagation(); this.tapSlot(list, i); });
+      el.appendChild(s);
+    }
+  }
+
+  tapSlot(list, i) {
+    const g = this.game;
+    const arr = this._listRef(list);
+    if (!arr) return;
+    const cur = this.cursor, target = arr[i];
+    if (cur) {
+      if (!target) {
+        arr[i] = cur; this.cursor = null;
+      } else if (target.id === cur.id) {
+        const max = g.stackMax(cur.id);
+        const take = Math.min(cur.count, max - target.count);
+        target.count += take; cur.count -= take;
+        if (cur.count <= 0) this.cursor = null;
+      } else {
+        arr[i] = cur; this.cursor = target;   // swap
+      }
+      g.sound.play('place');
+    } else if (target) {
+      this.cursor = target;
+      arr[i] = null;
+      g.sound.play('pickup');
+    }
+    this.refreshAllGrids();
+  }
+
+  // creative palette: tap an entry to grab a full stack onto the cursor
+  tapPalette(id) {
+    this.cursor = { id, count: this.game.stackMax(id) };
+    this.game.sound.play('pickup');
+    this.refreshAllGrids();
+  }
+
+  // put whatever is on the cursor back into the inventory (or discard in creative)
+  dropCursor() {
+    if (!this.cursor) return;
+    if (this.game.mode === 'survival') {
+      const left = this.game.invAdd(this.cursor.id, this.cursor.count);
+      if (left > 0) this.game.toast('Inventar voll — Rest verworfen');
+    }
+    this.cursor = null;
+    this.refreshAllGrids();
+  }
+
+  _refreshCursorBar() {
+    for (const bar of document.querySelectorAll('.cursor-bar')) {
+      if (!this.cursor) { bar.style.display = 'none'; continue; }
+      bar.style.display = 'flex';
+      this._paintSlot(bar.querySelector('.slot'), this.cursor);
+      bar.querySelector('.cnt').textContent = this.cursor.count > 1 ? this.cursor.count : '';
+      bar.querySelector('.cursor-hint').textContent =
+        itemName(this.cursor.id) + ' — tippe einen Slot (oder hier zum Ablegen)';
+    }
+  }
+
+  refreshAllGrids() {
+    const invOpen = document.getElementById('inventory').style.display === 'flex';
+    const chestOpen = document.getElementById('chest-ui').style.display === 'flex';
+    if (invOpen) {
+      this._renderGrid(document.getElementById('inv-grid'), 'inv', 9, 36);
+      this._renderGrid(document.getElementById('inv-hotbar'), 'inv', 0, 9);
+      this.refreshCrafting();
+    }
+    if (chestOpen) {
+      this._renderGrid(document.getElementById('chest-grid'), 'chest', 0, 15);
+      this._renderGrid(document.getElementById('chest-inv-grid'), 'inv', 0, 36);
+    }
+    this._refreshCursorBar();
+    this.refreshHotbar();
+  }
+
   // ---------------- inventory & crafting ----------------
   toggleInventory() {
     const el = document.getElementById('inventory');
     const open = el.style.display !== 'flex';
+    if (!open) this.dropCursor();
     el.style.display = open ? 'flex' : 'none';
     this.game.paused = open || document.getElementById('pause-menu').style.display === 'flex';
-    if (open) this.refreshInventory();
+    if (open) {
+      this.craftSel = -1;
+      this._nearTable = this._checkNearTable();
+      this.refreshInventory();
+    }
+  }
+
+  _checkNearTable() {
+    const g = this.game, p = g.player.pos;
+    const px = Math.floor(p.x), py = Math.floor(p.y), pz = Math.floor(p.z);
+    for (let dx = -5; dx <= 5; dx++) for (let dy = -3; dy <= 3; dy++) for (let dz = -5; dz <= 5; dz++) {
+      if (g.world.getBlock(px + dx, py + dy, pz + dz) === B.CRAFT) return true;
+    }
+    return false;
   }
 
   refreshInventory() {
     const g = this.game;
-    const grid = document.getElementById('inv-grid');
-    grid.innerHTML = '';
     document.getElementById('inv-title').textContent =
       g.mode === 'creative' ? 'Kreativ-Inventar' : 'Inventar';
-    const ids = g.mode === 'creative'
-      ? CREATIVE_BLOCKS
-      : [...g.inventory.entries()].filter(([, n]) => n > 0).map(([id]) => id);
 
-    for (const id of ids) {
-      const s = document.createElement('div');
-      s.className = 'slot';
-      const n = g.mode === 'survival' ? (g.inventory.get(id) || 0) : '';
-      s.innerHTML = `<div class="icon" style="background-image:url(${this.atlasUrl});background-position:${tileCss(id)}"></div><div class="cnt">${n}</div>`;
-      s.title = itemName(id);
-      s.addEventListener('pointerdown', () => {
-        this.hotbar[this.selected] = id;
-        this.refreshHotbar();
-        this.game.toast(itemName(id) + ' → Slot ' + (this.selected + 1), 900);
-      });
-      grid.appendChild(s);
+    // creative palette
+    const palWrap = document.getElementById('palette-wrap');
+    if (g.mode === 'creative') {
+      palWrap.style.display = 'block';
+      const pal = document.getElementById('palette-grid');
+      pal.innerHTML = '';
+      const ids = [...CREATIVE_BLOCKS, B.PICK_DIA, B.SWORD_DIA, B.APPLE, B.BEEF];
+      for (const id of ids) {
+        const s = document.createElement('div');
+        s.className = 'slot';
+        s.innerHTML = '<div class="icon"></div><div class="cnt"></div>';
+        this._paintSlot(s, { id, count: 1 });
+        s.addEventListener('pointerdown', e => { e.stopPropagation(); this.tapPalette(id); });
+        pal.appendChild(s);
+      }
+    } else {
+      palWrap.style.display = 'none';
     }
-    if (!ids.length) grid.innerHTML = '<div style="padding:14px;color:#999;font-size:13px">Baue Blöcke ab, um sie zu sammeln!</div>';
 
-    // crafting (survival only)
-    const cl = document.getElementById('craft-list');
-    const ct = document.getElementById('craft-title');
-    if (g.mode === 'creative') { cl.style.display = 'none'; ct.style.display = 'none'; return; }
-    cl.style.display = 'block'; ct.style.display = 'block';
-    cl.innerHTML = '';
-    for (const r of RECIPES) {
-      const row = document.createElement('div');
-      row.className = 'recipe';
-      const needTxt = r.in.map(([id, n]) => `${n}× ${itemName(id)}`).join(' + ');
-      const can = r.in.every(([id, n]) => (g.inventory.get(id) || 0) >= n);
-      row.innerHTML = `
-        <div class="icon" style="background-image:url(${this.atlasUrl});background-position:${tileCss(r.out)}"></div>
-        <div class="txt"><b>${r.n}× ${itemName(r.out)}</b><br><span style="color:#aaa">${needTxt}</span></div>
-        <button ${can ? '' : 'disabled'}>Herstellen</button>`;
-      row.querySelector('button').addEventListener('pointerdown', e => {
+    this.refreshAllGrids();
+  }
+
+  refreshCrafting() {
+    const g = this.game;
+    const wrap = document.getElementById('craft-cards');
+    const detail = document.getElementById('craft-detail');
+    const title = document.getElementById('craft-title');
+    if (g.mode === 'creative') {
+      wrap.style.display = 'none'; detail.style.display = 'none'; title.style.display = 'none';
+      return;
+    }
+    wrap.style.display = 'grid'; title.style.display = 'block';
+    title.textContent = this._nearTable ? 'Handwerk (Werkbank in Reichweite)' : 'Handwerk';
+    wrap.innerHTML = '';
+
+    RECIPES.forEach((r, idx) => {
+      const locked = !r.basic && !this._nearTable;
+      const can = !locked && r.in.every(([id, n]) => g.invCount(id) >= n);
+      const card = document.createElement('div');
+      card.className = 'craft-card ' + (locked ? 'locked' : (can ? 'ok' : 'miss')) +
+        (idx === this.craftSel ? ' picked' : '');
+      card.innerHTML = `<div class="icon" style="background-image:url(${this.atlasUrl});background-position:${tileCss(r.out)}"></div>` +
+        (r.n > 1 ? `<div class="cnt">${r.n}</div>` : '') +
+        (locked ? '<div class="lock">🔒</div>' : '');
+      card.title = itemName(r.out);
+      card.addEventListener('pointerdown', e => {
         e.stopPropagation();
-        if (!r.in.every(([id, n]) => (g.inventory.get(id) || 0) >= n)) return;
-        for (const [id, n] of r.in) g.inventory.set(id, g.inventory.get(id) - n);
-        g.addItem(r.out, r.n);
-        g.sound.play('craft');
-        this.refreshInventory();
-        this.refreshHotbar();
+        this.craftSel = idx;
+        this.refreshCrafting();
       });
-      cl.appendChild(row);
+      wrap.appendChild(card);
+    });
+
+    // detail panel for the selected recipe
+    if (this.craftSel < 0 || this.craftSel >= RECIPES.length) {
+      detail.style.display = 'none';
+      return;
     }
+    const r = RECIPES[this.craftSel];
+    const locked = !r.basic && !this._nearTable;
+    const maxTimes = locked ? 0 :
+      Math.min(64, ...r.in.map(([id, n]) => Math.floor(g.invCount(id) / n)));
+    detail.style.display = 'block';
+    const chips = r.in.map(([id, n]) => {
+      const have = g.invCount(id);
+      return `<span class="chip ${have >= n ? 'have' : 'lack'}">
+        <span class="icon" style="background-image:url(${this.atlasUrl});background-position:${tileCss(id)}"></span>
+        ${n}× ${itemName(id)} <small>(${have})</small></span>`;
+    }).join('');
+    detail.innerHTML = `
+      <div class="craft-name"><b>${r.n}× ${itemName(r.out)}</b>${locked ? ' — 🔒 Werkbank benötigt' : ''}</div>
+      <div class="chips">${chips}</div>
+      <div class="craft-btns">
+        <button id="craft-one" ${maxTimes >= 1 ? '' : 'disabled'}>Herstellen</button>
+        <button id="craft-max" ${maxTimes >= 2 ? '' : 'disabled'}>Max (${maxTimes})</button>
+      </div>`;
+    const doCraft = times => {
+      for (let t = 0; t < times; t++) {
+        if (!r.in.every(([id, n]) => g.invCount(id) >= n)) break;
+        for (const [id, n] of r.in) g.invRemove(id, n);
+        g.addItem(r.out, r.n);
+      }
+      g.sound.play('craft');
+      this.refreshAllGrids();
+    };
+    detail.querySelector('#craft-one').addEventListener('pointerdown', e => { e.stopPropagation(); doCraft(1); });
+    detail.querySelector('#craft-max').addEventListener('pointerdown', e => { e.stopPropagation(); doCraft(maxTimes); });
   }
 
   // ---------------- chest ----------------
   openChest(key) {
     const g = this.game;
     this.chestKey = key;
-    if (!g.chests.has(key)) g.chests.set(key, new Map());
+    if (!g.chests.has(key)) g.chests.set(key, new Array(15).fill(null));
     document.getElementById('chest-ui').style.display = 'flex';
     g.paused = true;
-    this.refreshChest();
+    this.refreshAllGrids();
   }
 
   closeChest() {
+    this.dropCursor();
     document.getElementById('chest-ui').style.display = 'none';
     this.chestKey = null;
     this.game.paused = false;
     this.refreshHotbar();
-  }
-
-  refreshChest() {
-    const g = this.game;
-    const chest = g.chests.get(this.chestKey);
-    if (!chest) return;
-
-    const fillGrid = (el, entries, emptyText, onTap) => {
-      el.innerHTML = '';
-      let any = false;
-      for (const [id, n] of entries) {
-        if (n <= 0) continue;
-        any = true;
-        const s = document.createElement('div');
-        s.className = 'slot';
-        s.innerHTML = `<div class="icon" style="background-image:url(${this.atlasUrl});background-position:${tileCss(id)}"></div><div class="cnt">${n}</div>`;
-        s.title = itemName(id);
-        s.addEventListener('pointerdown', () => onTap(id, n));
-        el.appendChild(s);
-      }
-      if (!any) el.innerHTML = `<div class="empty-note">${emptyText}</div>`;
-    };
-
-    // chest side: tap -> take the whole stack
-    fillGrid(document.getElementById('chest-grid'), chest, 'Diese Truhe ist leer.', (id, n) => {
-      chest.set(id, 0);
-      g.addItem(id, n);
-      g.sound.play('pickup');
-      this.refreshChest();
-    });
-    // inventory side: tap -> store the whole stack
-    fillGrid(document.getElementById('chest-inv-grid'), g.inventory, 'Dein Inventar ist leer.', (id, n) => {
-      g.inventory.set(id, 0);
-      chest.set(id, (chest.get(id) || 0) + n);
-      g.sound.play('place');
-      this.refreshChest();
-    });
   }
 
   // ---------------- pause / menus ----------------
@@ -210,6 +325,8 @@ class UI {
 
     $('btn-inv-close').addEventListener('pointerdown', () => this.toggleInventory());
     $('btn-chest-close').addEventListener('pointerdown', () => this.closeChest());
+    document.querySelectorAll('.cursor-bar').forEach(bar =>
+      bar.addEventListener('pointerdown', e => { e.stopPropagation(); this.dropCursor(); }));
     $('btn-resume').addEventListener('pointerdown', () => this.togglePause());
     $('btn-save').addEventListener('pointerdown', () => { g.save(); g.toast('Welt gespeichert ✓'); });
     $('btn-quit').addEventListener('pointerdown', () => { g.save(); location.reload(); });

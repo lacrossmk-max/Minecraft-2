@@ -80,10 +80,12 @@ const CREATIVE_BLOCKS = [
 ];
 
 // Simplified crafting recipes: { out, n, in: [[id, count], ...] }
+// recipes marked `basic` craft anywhere; everything else needs a crafting
+// table within reach (5 blocks)
 const RECIPES = [
-  { out: B.PLANKS, n: 4, in: [[B.LOG, 1]] },
-  { out: B.TORCH,  n: 8, in: [[B.LOG, 1], [B.COAL, 1]] },
-  { out: B.CRAFT,  n: 1, in: [[B.PLANKS, 4]] },
+  { out: B.PLANKS, n: 4, in: [[B.LOG, 1]], basic: true },
+  { out: B.TORCH,  n: 8, in: [[B.LOG, 1], [B.COAL, 1]], basic: true },
+  { out: B.CRAFT,  n: 1, in: [[B.PLANKS, 4]], basic: true },
   { out: B.GLASS,  n: 2, in: [[B.SAND, 1], [B.COAL, 1]] },
   { out: B.BRICK,  n: 4, in: [[B.COBBLE, 4]] },
   { out: B.GLOWSTONE, n: 1, in: [[B.GOLD, 2], [B.COAL, 1]] },
